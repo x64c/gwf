@@ -1,0 +1,29 @@
+package pgsql
+
+import (
+	"fmt"
+
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/x64c/gwf/gw/sqldbs"
+)
+
+// Ensure pgsql.Result implements sqldbs.Result interface
+var _ sqldbs.Result = (*Result)(nil)
+
+type Result struct {
+	tag          pgconn.CommandTag
+	lastInsertID int64 // Auto-increment ID
+}
+
+func (r *Result) RowsAffected() (int64, error) {
+	return r.tag.RowsAffected(), nil
+}
+
+// LastInsertId - PostgreSQL does not support LastInsertId.
+func (r *Result) LastInsertId() (int64, error) {
+	if r.lastInsertID != 0 {
+		return r.lastInsertID, nil
+	}
+	// err := dbHandle.QueryRow(ctx, "INSERT INTO users(first_name, last_name) VALUES($1, $2) RETURNING id", "John", "Doe").Scan(&id)
+	return 0, fmt.Errorf("LastInsertId not supported; use `RETURNING id` instead")
+}
