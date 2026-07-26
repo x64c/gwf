@@ -1,0 +1,219 @@
+package throttle
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"sync"
+	"time"
+
+	"github.com/x64c/gwf/gw/svc"
+)
+
+type Service struct {
+	Ctx              context.Context    // per-cycle runtime context (set in Start)
+	cancel           context.CancelFunc // per-cycle cancel (set in Start)
+	state            svc.AtomicState    // internal service state (read on the request path via Allow)
+	terminated       chan error         // one-shot; fires when Terminate completes
+	stopped          chan struct{}      // per-cycle; closed when run goroutine has stopped
+	cleanupCycle     time.Duration
+	cleanupOlderThan time.Duration
+	groups           map[string]*BucketGroup // groupID -> *BucketGroup
+}
+
+func (s *Service) Name() string {
+	return "ThrottleService"
+}
+
+func (s *Service) State() svc.State {
+	return s.state.Load()
+}
+
+func NewService(cleanupCycle time.Duration, cleanupOlderThan time.Duration) *Service {
+	s := &Service{
+		terminated:       make(chan error, 1),
+		cleanupCycle:     cleanupCycle,
+		cleanupOlderThan: cleanupOlderThan,
+		groups:           make(map[string]*BucketGroup),
+	}
+	s.state.Store(svc.StateREADY)
+	return s
+}
+
+// Start : READY → RUNNING. parentCtx is the runtime cancellation lineage.
+// Lifecycle methods (Start/Stop/Terminate) are not safe to call concurrently.
+func (s *Service) Start(parentCtx context.Context) error {
+	if s.state.Load() == svc.StateRUNNING {
+		return nil // idempotent
+	}
+	if s.state.Load() != svc.StateREADY {
+		return fmt.Errorf("cannot start: state is %v, must be READY", s.state.Load())
+	}
+	log.Printf("[INFO][%s] Starting.", s.Name())
+	s.Ctx, s.cancel = context.WithCancel(parentCtx)
+	s.stopped = make(chan struct{}) // fresh per cycle
+	s.state.Store(svc.StateRUNNING)
+	log.Printf("[INFO][%s] Running. (cleanup cycle=%v exp=%v)", s.Name(), s.cleanupCycle, s.cleanupOlderThan)
+	go s.run()
+	return nil
+}
+
+// Stop : RUNNING → STOPPING → READY. Synchronous on the run goroutine's exit.
+// ctx is the operation deadline.
+func (s *Service) Stop(ctx context.Context) error {
+	if s.state.Load() == svc.StateREADY {
+		return nil // idempotent
+	}
+	if s.state.Load() != svc.StateRUNNING {
+		return fmt.Errorf("cannot stop: state is %v, must be RUNNING", s.state.Load())
+	}
+	s.state.Store(svc.StateSTOPPING)
+	return s.stop(ctx)
+	// transitionAfterRun in run goroutine flips STOPPING → READY
+}
+
+// Terminate : any → TERMINATING (irreversible). If currently RUNNING, runs
+// the full stop activity. If STOPPING (Stop already cancelled, possibly
+// timed out), just waits for the run goroutine to actually exit. Fires
+// Terminated when complete.
+func (s *Service) Terminate(ctx context.Context) error {
+	if s.state.Load() == svc.StateTERMINATING {
+		return nil // idempotent
+	}
+	prevState := s.state.Load()
+	s.state.Store(svc.StateTERMINATING)
+	log.Printf("[INFO][%s] Terminating.", s.Name())
+	switch prevState {
+	case svc.StateRUNNING:
+		if err := s.stop(ctx); err != nil {
+			return err
+		}
+	case svc.StateSTOPPING:
+		if err := s.waitStopped(ctx); err != nil {
+			return err
+		}
+	}
+	s.terminated <- nil
+	log.Printf("[INFO][%s] Terminated.", s.Name())
+	return nil
+}
+
+// stop runs the full stop activity: log "Stopping.", cancel, waitStopped.
+// Called by Stop and by Terminate (when prior state was RUNNING).
+func (s *Service) stop(ctx context.Context) error {
+	log.Printf("[INFO][%s] Stopping.", s.Name())
+	s.cancel()
+	return s.waitStopped(ctx)
+}
+
+// waitStopped waits for the run goroutine to exit; logs "Stopped." on success.
+// Called by stop() and by Terminate (when prior state was STOPPING — cancel
+// was already issued by the in-flight Stop, which may have ctx-timed out).
+func (s *Service) waitStopped(ctx context.Context) error {
+	select {
+	case <-s.stopped:
+		log.Printf("[INFO][%s] Stopped.", s.Name())
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("stop deadline exceeded: %w", ctx.Err())
+	}
+}
+
+func (s *Service) Terminated() <-chan error {
+	return s.terminated
+}
+
+func (s *Service) run() {
+	ticker := time.NewTicker(s.cleanupCycle)
+	defer ticker.Stop()
+	defer close(s.stopped)       // declared 2nd → runs 2nd-to-last (after transitionAfterRun)
+	defer s.transitionAfterRun() // declared 3rd → runs FIRST (LIFO defer order)
+	for {
+		select {
+		case <-s.Ctx.Done():
+			return
+		case now := <-ticker.C:
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("[PANIC][%s] recovered in cleanup cycle: %v", s.Name(), r)
+					}
+				}()
+				log.Printf("[INFO][%s] %v cleanup cycle ...", s.Name(), s.cleanupCycle)
+				s.Cleanup(now)
+			}()
+		}
+	}
+}
+
+// transitionAfterRun moves the state out of STOPPING into READY once the run
+// goroutine has exited. If state is TERMINATING, Terminate's flow handles the
+// rest — we leave the state alone.
+func (s *Service) transitionAfterRun() {
+	if s.state.Load() == svc.StateSTOPPING {
+		s.state.Store(svc.StateREADY)
+	}
+}
+
+func (s *Service) GetBucketGroup(id string) (*BucketGroup, bool) {
+	g, ok := s.groups[id]
+	return g, ok
+}
+
+func (s *Service) GetBucket(groupID string, bucketID string) (*Bucket, bool) {
+	g, ok := s.groups[groupID]
+	if !ok {
+		return nil, false
+	}
+	return g.GetBucket(bucketID)
+}
+
+// SetBucketGroup registers a bucket group by id. Must be called BEFORE Start;
+// the groups map is plain (no mutex) and is only safe under the contract that
+// all writes happen during startup, then only reads occur (request handlers +
+// cleanup ticker) — which is race-free for a Go map. Calling this after Start
+// would violate that contract and cause data races, so it fails loud here.
+func (s *Service) SetBucketGroup(id string, conf *BucketConf) {
+	if s.state.Load() == svc.StateRUNNING {
+		log.Fatalf("[ERROR][%s] Can't set a bucket group(%q). Service already running.", s.Name(), id)
+	}
+	s.groups[id] = &BucketGroup{
+		conf:    conf,
+		buckets: &sync.Map{},
+	}
+}
+
+func (s *Service) Allow(groupID string, bucketID string, now time.Time) bool {
+	if s.state.Load() != svc.StateRUNNING {
+		return true // not running → not throttling
+	}
+	g, ok := s.GetBucketGroup(groupID)
+	if !ok {
+		return false // Invalid groupID -> always Blocked
+	}
+	b, ok := g.GetBucket(bucketID)
+	if ok {
+		return b.Allow(now)
+	}
+	// consume 1 token from the fresh bucket
+	g.SetBucket(bucketID, g.conf.Burst-1, now)
+	return true
+}
+
+// Inspect returns a snapshot of all BucketGroup IDs and their local Bucket IDs.
+// It does not lock globally, so results may be slightly inconsistent
+// if buckets are being modified concurrently — which is fine for inspection.
+func (s *Service) Inspect() map[string][]string {
+	result := make(map[string][]string)
+
+	for groupID, bucketGroup := range s.groups {
+		var ids []string
+		bucketGroup.buckets.Range(func(localID, _ any) bool {
+			ids = append(ids, localID.(string))
+			return true
+		})
+		result[groupID] = ids
+	}
+
+	return result
+}

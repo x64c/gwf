@@ -1,0 +1,46 @@
+package cookie
+
+import (
+	"sync/atomic"
+
+	"github.com/x64c/gwf/gw/kvdbs"
+	"github.com/x64c/gwf/gw/security"
+	"github.com/x64c/gwf/gw/svc"
+	"github.com/x64c/gwf/gw/web/fwupstream"
+	"github.com/x64c/gwf/gw/web/session/lockstore"
+)
+
+// SessionManager owns cookie-session operations across both user and anonymous shapes.
+// Each shape's state (Conf sub-block, Cipher) is present iff that shape is configured.
+type SessionManager struct {
+	Conf *SessionConf
+
+	UserCookieCipher      *security.XChaCha20Poly1305Cipher // present iff Conf.UserSession != nil
+	AnonymousCookieCipher *security.XChaCha20Poly1305Cipher // present iff Conf.AnonymousSession != nil
+
+	FWUpstream *fwupstream.Hub // upstream subsystem; token I/O delegates here. nil iff this app has no upstream
+
+	AppName       string
+	KVDB          kvdbs.DB // holds session rows
+	SessionLocks  *lockstore.Store
+	ParentService svc.StateReporter // the owning session.Service (read-only on State()), for Serving()
+
+	enabled atomic.Bool // the cookie protocol's on/off switch (svc.Switchable)
+}
+
+// Enable / Disable / Enabled implement svc.Switchable — the cookie protocol's
+// own on/off switch. Enabled() reports only this switch; whether requests
+// actually serve also depends on the service lifecycle (session.Service.Serving).
+func (m *SessionManager) Enable()       { m.enabled.Store(true) }
+func (m *SessionManager) Disable()      { m.enabled.Store(false) }
+func (m *SessionManager) Enabled() bool { return m.enabled.Load() }
+
+// Serving reports whether the cookie protocol should serve right now: its parent
+// service is RUNNING and its own switch is Enabled. Fail-closed — a nil
+// ParentService (manager not attached to a service) reports false.
+func (m *SessionManager) Serving() bool {
+	if m.ParentService == nil {
+		return false
+	}
+	return m.ParentService.State() == svc.StateRUNNING && m.Enabled()
+}
