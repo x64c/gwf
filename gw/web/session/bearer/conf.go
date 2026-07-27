@@ -1,7 +1,7 @@
 package bearer
 
 // SessionGroupConf is one bearer session-management group — one top-level entry
-// in .bearer-session.json. All clients within a group share the group's session
+// in .web-bearer-session.json. All clients within a group share the group's session
 // policy (binds, cap, TTLs).
 //
 // Identity dimensions:

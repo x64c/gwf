@@ -3,6 +3,7 @@ package framework
 import (
 	"context"
 	"encoding/json/v2"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -25,6 +26,9 @@ func (c *Core) BaseInit(appRoot string, rootCtx context.Context, rootCancel cont
 	}
 	if err = json.Unmarshal(envBytes, c); err != nil {
 		return err
+	}
+	if c.TerminateTimeoutSecs <= 0 {
+		return fmt.Errorf("terminate_timeout_secs must be set (seconds > 0) in .core.json: got %d", c.TerminateTimeoutSecs)
 	}
 	c.RootCtx = rootCtx
 	c.RootCancel = rootCancel

@@ -13,7 +13,7 @@ import (
 	"github.com/x64c/gwf/gw/web/fwupstream"
 )
 
-// PrepareFWUpstream loads the app's single `.fwupstream.json` and builds the
+// PrepareFWUpstream loads the app's single `.fwupstream-web.json` and builds the
 // upstream subsystem hub on c.FWUpstream:
 //
 //   - clients: per-Client config keyed by Client id; an *fwupstream.Client
@@ -60,7 +60,7 @@ func (c *Core) PrepareFWUpstream(fwClients map[string]func(*fwupstream.Client)) 
 		return errors.New("no id provided")
 	}
 
-	confPath := filepath.Join(c.AppRoot, "config", ".fwupstream.json")
+	confPath := filepath.Join(c.AppRoot, "config", ".fwupstream-web.json")
 	confBytes, err := os.ReadFile(confPath)
 	if err != nil {
 		return err
@@ -91,7 +91,7 @@ func (c *Core) PrepareFWUpstream(fwClients map[string]func(*fwupstream.Client)) 
 	for id, setRefreshSideloaders := range fwClients {
 		clientConf, ok := conf.Clients[id]
 		if !ok {
-			return fmt.Errorf("upstream client %q has no entry under .fwupstream.json \"clients\"", id)
+			return fmt.Errorf("upstream client %q has no entry under .fwupstream-web.json \"clients\"", id)
 		}
 		fwc := &fwupstream.Client{
 			Client: web.ShallowCloneClient(c.BaseHttpClient),

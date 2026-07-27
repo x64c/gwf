@@ -14,7 +14,7 @@ import (
 )
 
 // PrepareCookieSessions prepares the cookie session manager covering both
-// user-bound and anonymous shapes. Reads .cookie-session.json with the
+// user-bound and anonymous shapes. Reads .web-cookie-session.json with the
 // "user" key (user shape) and "" key (anonymous shape) — either or both.
 // The manager is attached to SessionService.CookieSessionManager.
 // Prerequisite: MainKVDB, SessionService.
@@ -27,7 +27,7 @@ func (c *Core) PrepareCookieSessions(useFWUpstream bool) error {
 		return errors.New("session service not ready")
 	}
 
-	confFilePath := filepath.Join(c.AppRoot, "config", ".cookie-session.json")
+	confFilePath := filepath.Join(c.AppRoot, "config", ".web-cookie-session.json")
 	confBytes, err := os.ReadFile(confFilePath)
 	if err != nil {
 		return err

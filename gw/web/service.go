@@ -12,14 +12,15 @@ import (
 )
 
 type Service struct {
-	addr       string             // preserved across cycles for *http.Server rebuild
-	handler    http.Handler       // preserved across cycles
-	Ctx        context.Context    // per-cycle runtime context (set in Start)
-	cancel     context.CancelFunc // per-cycle cancel (set in Start)
-	state      svc.State          // internal service state
-	terminated chan error         // one-shot; fires when Terminate completes
-	stopped    chan struct{}      // per-cycle; closed when run goroutine has stopped
-	Server     *http.Server       // rebuilt each Start cycle (one-shot after Shutdown)
+	addr         string             // preserved across cycles for *http.Server rebuild
+	handler      http.Handler       // preserved across cycles
+	drainTimeout time.Duration      // HTTP graceful-drain window on shutdown (Server.Shutdown budget); set at construction
+	Ctx          context.Context    // per-cycle runtime context (set in Start)
+	cancel       context.CancelFunc // per-cycle cancel (set in Start)
+	state        svc.State          // internal service state
+	terminated   chan error         // one-shot; fires when Terminate completes
+	stopped      chan struct{}      // per-cycle; closed when run goroutine has stopped
+	Server       *http.Server       // rebuilt each Start cycle (one-shot after Shutdown)
 }
 
 func (s *Service) Name() string {
@@ -30,12 +31,13 @@ func (s *Service) State() svc.State {
 	return s.state
 }
 
-func NewService(addr string, httpHandler http.Handler) *Service {
+func NewService(addr string, httpHandler http.Handler, drainTimeout time.Duration) *Service {
 	return &Service{
-		addr:       addr,
-		handler:    httpHandler,
-		state:      svc.StateREADY,
-		terminated: make(chan error, 1),
+		addr:         addr,
+		handler:      httpHandler,
+		drainTimeout: drainTimeout,
+		state:        svc.StateREADY,
+		terminated:   make(chan error, 1),
 	}
 }
 
@@ -60,8 +62,8 @@ func (s *Service) Start(parentCtx context.Context) error {
 }
 
 // Stop : RUNNING → STOPPING → READY. Synchronous on the run goroutine's exit.
-// The internal graceful drain uses a hardcoded 15s timeout; ctx governs only
-// how long Stop waits for the run goroutine to actually exit.
+// The internal graceful drain uses the drainTimeout set at construction; ctx
+// governs only how long Stop waits for the run goroutine to actually exit.
 func (s *Service) Stop(ctx context.Context) error {
 	if s.state == svc.StateREADY {
 		return nil // idempotent
@@ -135,7 +137,7 @@ func (s *Service) run() {
 	select {
 	case <-s.Ctx.Done():
 		s.Server.SetKeepAlivesEnabled(false)
-		gracefulCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		gracefulCtx, cancel := context.WithTimeout(context.Background(), s.drainTimeout)
 		defer cancel()
 		if err := s.Server.Shutdown(gracefulCtx); err != nil {
 			log.Printf("[ERROR][HTTPServer] shutdown failed: %v", err)

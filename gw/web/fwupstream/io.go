@@ -13,7 +13,7 @@ import (
 // Tokens are encrypted at rest with the Hub's TokenCipher: a KVDB dump (backup,
 // managed-Redis read, separate-host compromise) yields ciphertext an attacker
 // can't replay against the upstream. The cipher is required — a nil Hub or nil
-// TokenCipher means the app didn't configure token_cipher in .fwupstream.json, so
+// TokenCipher means the app didn't configure token_cipher in .fwupstream-web.json, so
 // these return UpstreamTokenCipherNotSet rather than storing plaintext.
 
 // FetchAccessToken reads and decrypts the upstream access token for clientID

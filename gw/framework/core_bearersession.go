@@ -17,7 +17,7 @@ var validBearerBinds = map[string]struct{}{
 	"user":   {},
 }
 
-// PrepareBearerSessions reads .bearer-session.json, parses the group→clients
+// PrepareBearerSessions reads .web-bearer-session.json, parses the group→clients
 // tree, validates the structure, populates per-entry back-refs (Name, Group),
 // and builds the by-ID ClientConfs lookup map. The manager is attached to
 // SessionService.BearerSessionManager.
@@ -35,7 +35,7 @@ func (c *Core) PrepareBearerSessions(useFWUpstream bool) error {
 		return errors.New("main kvdb not ready")
 	}
 
-	confFilePath := filepath.Join(c.AppRoot, "config", ".bearer-session.json")
+	confFilePath := filepath.Join(c.AppRoot, "config", ".web-bearer-session.json")
 	confBytes, err := os.ReadFile(confFilePath)
 	if err != nil {
 		return err

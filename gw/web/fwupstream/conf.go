@@ -1,6 +1,6 @@
 package fwupstream
 
-// Conf is the parsed `.fwupstream.json` — the app's whole upstream subsystem
+// Conf is the parsed `.fwupstream-web.json` — the app's whole upstream subsystem
 // config: the optional at-rest token cipher plus the per-Client configs.
 type Conf struct {
 	TokenCipher *TokenCipherConf         `json:"token_cipher"` // optional; present iff the app stores upstream tokens (absent for JWKS-only upstreams)

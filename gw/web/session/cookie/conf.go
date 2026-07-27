@@ -58,7 +58,7 @@ func validateExpiry(label string, expireIn int, mode ExpireMode, extendThreshold
 }
 
 // Validate reports the first invalid field in the user-shape config, so a
-// misconfigured .cookie-session.json fails loudly at startup rather than
+// misconfigured .web-cookie-session.json fails loudly at startup rather than
 // surfacing as obscure runtime behavior. EncryptionKey is validated separately
 // during cipher construction (base64 decode + 32-byte length check).
 func (c *UserSessionConf) Validate() error {
