@@ -265,14 +265,13 @@ func (d *DB) Ping(ctx context.Context) error {
 
 // Transaction
 
+// BeginTx starts a transaction on a pool-owned connection. pool.Begin (not
+// Acquire + conn.Begin) because the returned *pgxpool.Tx releases the
+// connection back to the pool on Commit/Rollback — a conn acquired here has no
+// owner afterwards and would leak a pool slot per transaction.
 func (d *DB) BeginTx(ctx context.Context) (sqldbs.Tx, error) {
-	conn, err := d.pool.Acquire(ctx)
+	tx, err := d.pool.Begin(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("acquire connection failed: %w", err)
-	}
-	tx, err := conn.Begin(ctx)
-	if err != nil {
-		conn.Release()
 		return nil, fmt.Errorf("begin transaction failed: %w", err)
 	}
 	return &Tx{tx: tx, db: d}, nil
