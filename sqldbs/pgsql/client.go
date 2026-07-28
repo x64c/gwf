@@ -132,8 +132,13 @@ func (c *Client) InPlaceholders(start, cnt int) string {
 
 // Identifier Quoting
 
+// QuoteIdentifier quotes an identifier for PostgreSQL, escaping the quote
+// character by doubling it. Without that, a name containing `"` closes the
+// quoting early and everything after it is parsed as SQL — identifiers reach
+// here from caller-supplied column lists, so this is an injection boundary,
+// not cosmetics.
 func (c *Client) QuoteIdentifier(name string) string {
-	return `"` + name + `"`
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
 // PrepareClients loads PostgreSQL client configs from .sqldb-clients-pgsql.json

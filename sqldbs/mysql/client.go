@@ -129,8 +129,12 @@ func (c *Client) InPlaceholders(_, cnt int) string {
 
 // Identifier Quoting
 
+// QuoteIdentifier quotes an identifier for MySQL, escaping the quote character
+// by doubling it. Without that, a name containing a backtick closes the quoting
+// early and everything after it is parsed as SQL — identifiers reach here from
+// caller-supplied column lists, so this is an injection boundary, not cosmetics.
 func (c *Client) QuoteIdentifier(name string) string {
-	return "`" + name + "`"
+	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 }
 
 // PrepareClients loads MySQL client configs from .sqldb-clients-mysql.json
