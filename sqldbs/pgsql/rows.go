@@ -19,26 +19,10 @@ func (r *Rows) Next() bool {
 	return r.current.Next()
 }
 
+// Scan passes dests straight to pgx: type mapping is pgx-native
+// (Go bool ↔ boolean, etc.) — no cross-dialect value shims.
 func (r *Rows) Scan(dest ...any) error {
-	raw := make([]any, len(dest))
-	for i, d := range dest {
-		switch d.(type) {
-		case *bool:
-			raw[i] = new(int16) // PostgreSQL's smallest integer type is smallint (2 bytes)
-		default:
-			raw[i] = d
-		}
-	}
-	if err := r.current.Scan(raw...); err != nil {
-		return err
-	}
-	for i, d := range dest {
-		switch v := d.(type) {
-		case *bool:
-			*v = *(raw[i].(*int16)) != 0
-		}
-	}
-	return nil
+	return r.current.Scan(dest...)
 }
 
 func (r *Rows) Close() error {

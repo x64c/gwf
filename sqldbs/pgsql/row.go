@@ -14,30 +14,12 @@ type Row struct {
 	row pgx.Row
 }
 
+// Scan passes dests straight to pgx: type mapping is pgx-native
+// (Go bool ↔ boolean, etc.) — no cross-dialect value shims.
 func (r *Row) Scan(dest ...any) error {
-	// first, scan to `int16`s instead of `bool`s
-	raw := make([]any, len(dest))
-	for i, d := range dest {
-		switch d.(type) {
-		case *bool:
-			raw[i] = new(int16) // PostgreSQL's smallest integer type is smallint (2 bytes)
-		default:
-			raw[i] = d
-		}
+	err := r.row.Scan(dest...)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return sqldbs.ErrNoRows
 	}
-	err := r.row.Scan(raw...)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return sqldbs.ErrNoRows
-		}
-		return err
-	}
-	// fill dest with `bool` as `bool`
-	for i, d := range dest {
-		switch v := d.(type) {
-		case *bool:
-			*v = *(raw[i].(*int16)) != 0
-		}
-	}
-	return nil
+	return err
 }
