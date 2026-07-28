@@ -35,6 +35,12 @@ type Client interface {
 
 	// QuoteIdentifier - Quote an identifier for the dialect (e.g. MySQL: `name`, PostgreSQL: "name").
 	// Identifiers are case-sensitive — the exact casing provided is preserved.
-	// Used by structured CRUD methods (InsertRow, UpdateRow, etc.) to safely quote column/table names.
+	// Used by structured CRUD methods (InsertRow, UpdateRow, etc.) to quote column/table names.
+	//
+	// MUST escape the dialect's quote character (SQL escapes it by doubling).
+	// Identifiers arrive here from caller-supplied column lists, so an
+	// implementation that merely concatenates lets a name containing the quote
+	// character close the quoting and inject SQL. Escaping cannot break a
+	// legitimate identifier: a name that contains no quote is unchanged.
 	QuoteIdentifier(name string) string
 }

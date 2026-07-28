@@ -106,7 +106,15 @@ func UpdateModel[
 		columns = updateColumns
 		values = make([]any, len(updateColumns))
 		for i, col := range updateColumns {
-			values[i] = fieldMap[col]
+			// Allow-list, not pattern-match: an update column must be one the
+			// model declares writable. That keeps caller-supplied strings from
+			// reaching SQL as identifiers at all, and catches the silent
+			// alternative — an unknown key would otherwise write NULL.
+			val, ok := fieldMap[col]
+			if !ok {
+				return nil, fmt.Errorf("UpdateModel: %q is not a writable field of %q", col, meta.Name)
+			}
+			values[i] = val
 		}
 	}
 	return exec.UpdateRow(ctx, meta.Name, meta.PK, model.GetID(), columns, values)
@@ -134,6 +142,15 @@ func UpdateModelCollection[
 	}
 	var columns []string
 	if len(updateColumns) > 0 {
+		// Allow-list against what the model declares writable — same reason as
+		// UpdateModel: caller-supplied strings must never reach SQL as raw
+		// identifiers, and an unknown key would otherwise write NULL per item.
+		firstMap := first.FieldsToWrite()
+		for _, col := range updateColumns {
+			if _, ok := firstMap[col]; !ok {
+				return 0, fmt.Errorf("UpdateModelCollection: %q is not a writable field of %q", col, meta.Name)
+			}
+		}
 		columns = updateColumns
 	} else {
 		firstMap := first.FieldsToWrite()
