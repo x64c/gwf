@@ -11,11 +11,11 @@ use (
 )
 
 replace (
-	github.com/x64c/gwf/gw v0.3.0 => ./gw
-	github.com/x64c/gwf/kvdbs/redis v0.3.0 => ./kvdbs/redis
-	github.com/x64c/gwf/pdfs/fpdf v0.3.0 => ./pdfs/fpdf
-	github.com/x64c/gwf/sqldbs/mysql v0.3.0 => ./sqldbs/mysql
-	github.com/x64c/gwf/sqldbs/pgsql v0.3.0 => ./sqldbs/pgsql
-	github.com/x64c/gwf/storages/s3 v0.3.0 => ./storages/s3
-	github.com/x64c/gwf/udscmds v0.3.0 => ./udscmds
+	github.com/x64c/gwf/gw v0.3.1 => ./gw
+	github.com/x64c/gwf/kvdbs/redis v0.3.1 => ./kvdbs/redis
+	github.com/x64c/gwf/pdfs/fpdf v0.3.1 => ./pdfs/fpdf
+	github.com/x64c/gwf/sqldbs/mysql v0.3.1 => ./sqldbs/mysql
+	github.com/x64c/gwf/sqldbs/pgsql v0.3.1 => ./sqldbs/pgsql
+	github.com/x64c/gwf/storages/s3 v0.3.1 => ./storages/s3
+	github.com/x64c/gwf/udscmds v0.3.1 => ./udscmds
 )
