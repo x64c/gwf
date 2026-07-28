@@ -25,29 +25,39 @@ type Service interface {
 	//
 	// Implementation guideline:
 	//
-	//   func (s *Service) Terminate(ctx context.Context) error {
-	//       if s.state == svc.StateTERMINATING { return nil }  // idempotent
+	//   func (s *Service) Terminate(ctx context.Context) (err error) {
+	//       if s.state == svc.StateTERMINATING { return nil }  // idempotent — returns BEFORE the defer arms
 	//       prevState := s.state
 	//       s.state = svc.StateTERMINATING                      // set IMMEDIATELY (honest to concurrent State() readers)
 	//       log.Printf("[INFO][%s] Terminating.", s.Name())     // activity marker
+	//       defer func() {
+	//           s.terminated <- err                             // ←── THE ONLY send site; fires on EVERY exit path
+	//           if err == nil {
+	//               log.Printf("[INFO][%s] Terminated.", s.Name())
+	//           } else {
+	//               log.Printf("[ERROR][%s] Terminated with stop error: %v", s.Name(), err)
+	//           }
+	//       }()
 	//       switch prevState {
 	//       case svc.StateRUNNING:
-	//           if err := s.stop(ctx); err != nil { return err }     // full stop activity (cancel + wait + logs)
+	//           err = s.stop(ctx)        // full stop activity (cancel + wait + logs)
 	//       case svc.StateSTOPPING:
-	//           if err := s.waitStopped(ctx); err != nil { return err } // wait only — Stop already cancelled
+	//           err = s.waitStopped(ctx) // wait only — Stop already cancelled
 	//       }
-	//       s.terminated <- nil                                  // ←── THE ONLY allowed send site for s.terminated
-	//       log.Printf("[INFO][%s] Terminated.", s.Name())       // completion marker
-	//       return nil
+	//       return err
 	//   }
 	//
 	// Rules:
 	//   - Set state = TERMINATING FIRST (before any work), so concurrent State()
 	//     reads never see a misleading transient value during shutdown.
-	//   - Send on `s.terminated` ONLY HERE, exactly once per service lifetime.
-	//     Never from Stop, run goroutine exit, RootCancel cascade, or anywhere
-	//     else. The one-shot semantic is what `framework.Core.WaitServicesTerminated`
-	//     depends on to count N completions.
+	//   - Send on `s.terminated` from the DEFER above, exactly once per service
+	//     lifetime (the idempotent branch returns before the defer arms). Never
+	//     from Stop, run goroutine exit, RootCancel cascade, or anywhere else.
+	//   - The send is UNCONDITIONAL — a missed stop deadline must still report,
+	//     with its error. A service that returns early without sending leaves
+	//     `framework.Core.WaitServicesTerminated` counting N-1 forever: main
+	//     wedges until the supervisor's SIGKILL (reproduced 2026-07-27; one
+	//     ctx-blind job wedged the whole process for systemd's full 90s).
 	//   - Buffer `s.terminated` with capacity 1 (in NewService) so this single
 	//     send never blocks even if no one is reading yet.
 	Terminate(ctx context.Context) error

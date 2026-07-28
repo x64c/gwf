@@ -104,26 +104,28 @@ func (s *Service) Stop(ctx context.Context) error {
 
 // Terminate : any → TERMINATING (irreversible). If RUNNING, full stop;
 // if STOPPING, just wait for run goroutine to exit. Fires Terminated.
-func (s *Service) Terminate(ctx context.Context) error {
+func (s *Service) Terminate(ctx context.Context) (err error) {
 	if s.state == svc.StateTERMINATING {
-		return nil // idempotent
+		return nil // idempotent — returns before the defer arms
 	}
 	prevState := s.state
 	s.state = svc.StateTERMINATING
 	log.Printf("[INFO][%s] Terminating.", s.Name())
+	defer func() {
+		s.terminated <- err // THE ONLY send site; unconditional, exactly once
+		if err == nil {
+			log.Printf("[INFO][%s] Terminated.", s.Name())
+		} else {
+			log.Printf("[ERROR][%s] Terminated with stop error: %v", s.Name(), err)
+		}
+	}()
 	switch prevState {
 	case svc.StateRUNNING:
-		if err := s.stop(ctx); err != nil {
-			return err
-		}
+		err = s.stop(ctx)
 	case svc.StateSTOPPING:
-		if err := s.waitStopped(ctx); err != nil {
-			return err
-		}
+		err = s.waitStopped(ctx)
 	}
-	s.terminated <- nil
-	log.Printf("[INFO][%s] Terminated.", s.Name())
-	return nil
+	return err
 }
 
 // stop runs the full stop activity: log "Stopping.", cancel, waitStopped.

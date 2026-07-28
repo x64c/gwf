@@ -28,7 +28,7 @@ type Core struct {
 	Listen               string                                   `json:"listen"`                 // HTTP Application Listen IP:PORT Address
 	Host                 string                                   `json:"host"`                   // HTTP Host. Can be used to generate public url endpoints
 	DebugOpts            DebugOpts                                `json:"debug_opts"`             // Debug Options
-	TerminateTimeoutSecs int                                      `json:"terminate_timeout_secs"` // REQUIRED (> 0). TerminateServices budget: one shared deadline for the whole sequential shutdown, not per service. Must fit under the process supervisor's kill window (e.g. systemd < 90s, launchd < 20s, docker stop < 10s).
+	TerminateTimeoutSecs int                                      `json:"terminate_timeout_secs"` // REQUIRED (> 0). PER-SERVICE Terminate budget (each service gets a fresh deadline, sequentially). Worst-case total = N services × this. That total must fit under the process supervisor's kill window (e.g. systemd < 90s, launchd < 20s, docker stop < 10s).
 	AppRoot              string                                   `json:"-"`                      // Filled from compiled paths
 	RootCtx              context.Context                          `json:"-"`                      // Global Context with RootCancel
 	RootCancel           context.CancelFunc                       `json:"-"`                      // CancelFunc for RootCtx
@@ -89,13 +89,16 @@ func (c *Core) WaitServicesTerminated() error {
 
 func (c *Core) TerminateServices() {
 	log.Printf("[INFO] terminating all services (%d)", len(c.services))
-	// Operation-deadline ctx — separate from RootCtx, which is already cancelled
-	// by the signal handler. Terminate's waitStopped needs a ctx that isn't
-	// already done, otherwise its select fires the ctx.Done() branch before
-	// the stopped channel closes, and `terminated` never gets sent.
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.TerminateTimeoutSecs)*time.Second)
-	defer cancel()
+	// PER-SERVICE operation-deadline ctx — a fresh budget for each service, so
+	// one slow stop cannot starve the siblings behind it in the loop (a shared
+	// budget once handed healthy services an already-expired ctx; reproduced
+	// 2026-07-27). Separate from RootCtx, which is already cancelled by the
+	// signal handler: Terminate's waitStopped needs a ctx that isn't already
+	// done. Errors travel through each service's terminated channel (deferred
+	// send) to WaitServicesTerminated — nothing is silently lost here.
 	for _, s := range c.services {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.TerminateTimeoutSecs)*time.Second)
 		_ = s.Terminate(ctx)
+		cancel()
 	}
 }
