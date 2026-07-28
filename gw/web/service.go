@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"time"
 
 	"github.com/x64c/gwf/gw/svc"
 )
@@ -14,7 +13,7 @@ import (
 type Service struct {
 	addr         string             // preserved across cycles for *http.Server rebuild
 	handler      http.Handler       // preserved across cycles
-	drainTimeout time.Duration      // HTTP graceful-drain window on shutdown (Server.Shutdown budget); set at construction
+	conf         ServerConf         // the server recipe (deadlines + drain window), validated by the loader
 	Ctx          context.Context    // per-cycle runtime context (set in Start)
 	cancel       context.CancelFunc // per-cycle cancel (set in Start)
 	state        svc.State          // internal service state
@@ -31,13 +30,13 @@ func (s *Service) State() svc.State {
 	return s.state
 }
 
-func NewService(addr string, httpHandler http.Handler, drainTimeout time.Duration) *Service {
+func NewService(addr string, httpHandler http.Handler, conf ServerConf) *Service {
 	return &Service{
-		addr:         addr,
-		handler:      httpHandler,
-		drainTimeout: drainTimeout,
-		state:        svc.StateREADY,
-		terminated:   make(chan error, 1),
+		addr:       addr,
+		handler:    httpHandler,
+		conf:       conf,
+		state:      svc.StateREADY,
+		terminated: make(chan error, 1),
 	}
 }
 
@@ -52,7 +51,7 @@ func (s *Service) Start(parentCtx context.Context) error {
 		return fmt.Errorf("cannot start: state is %v, must be READY", s.state)
 	}
 	log.Printf("[INFO][%s] Starting.", s.Name())
-	s.Server = &http.Server{Addr: s.addr, Handler: s.handler} // fresh per cycle
+	s.Server = s.conf.newHTTPServer(s.addr, s.handler) // fresh per cycle
 	s.Ctx, s.cancel = context.WithCancel(parentCtx)
 	s.stopped = make(chan struct{}) // fresh per cycle
 	s.state = svc.StateRUNNING
@@ -62,8 +61,8 @@ func (s *Service) Start(parentCtx context.Context) error {
 }
 
 // Stop : RUNNING → STOPPING → READY. Synchronous on the run goroutine's exit.
-// The internal graceful drain uses the drainTimeout set at construction; ctx
-// governs only how long Stop waits for the run goroutine to actually exit.
+// The internal graceful drain uses the conf's drain window; ctx governs only
+// how long Stop waits for the run goroutine to actually exit.
 func (s *Service) Stop(ctx context.Context) error {
 	if s.state == svc.StateREADY {
 		return nil // idempotent
@@ -141,7 +140,7 @@ func (s *Service) run() {
 	select {
 	case <-s.Ctx.Done():
 		s.Server.SetKeepAlivesEnabled(false)
-		gracefulCtx, cancel := context.WithTimeout(context.Background(), s.drainTimeout)
+		gracefulCtx, cancel := context.WithTimeout(context.Background(), s.conf.drainTimeout())
 		defer cancel()
 		if err := s.Server.Shutdown(gracefulCtx); err != nil {
 			log.Printf("[ERROR][HTTPServer] shutdown failed: %v", err)

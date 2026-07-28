@@ -6,13 +6,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/x64c/gwf/gw/web"
 )
 
 // PrepareWebService loads config/.web-server.json (web.ServerConf), validates
-// it against the already-settled core conf, and registers the web service.
+// it — its own invariants, then the one relation it has to the already-settled
+// core conf — and registers the web service.
 // Call this when all the required services are prepared.
 func (c *Core) PrepareWebService(addr string, httpHandler http.Handler) error {
 	confFilePath := filepath.Join(c.AppRoot, "config", ".web-server.json")
@@ -24,13 +24,13 @@ func (c *Core) PrepareWebService(addr string, httpHandler http.Handler) error {
 	if err = json.Unmarshal(confBytes, &conf); err != nil {
 		return err
 	}
-	if conf.DrainTimeoutSecs <= 0 {
-		return fmt.Errorf("drain_timeout_secs must be set (seconds > 0) in .web-server.json: got %d", conf.DrainTimeoutSecs)
+	if err = conf.Validate(); err != nil {
+		return err
 	}
 	if conf.DrainTimeoutSecs >= c.TerminateTimeoutSecs {
 		return fmt.Errorf("drain_timeout_secs (%d) must be less than terminate_timeout_secs (%d): a full drain could never finish inside the shutdown budget", conf.DrainTimeoutSecs, c.TerminateTimeoutSecs)
 	}
-	c.WebService = web.NewService(addr, httpHandler, time.Duration(conf.DrainTimeoutSecs)*time.Second)
+	c.WebService = web.NewService(addr, httpHandler, conf)
 	c.AddService(c.WebService)
 	return nil
 }
