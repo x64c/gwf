@@ -17,11 +17,18 @@ var once sync.Once
 //
 //  1. c.RootCancel() — the in-process equivalent of SIGTERM. Closes RootCtx
 //     and cascades to every context derived from it (each service's s.Ctx,
-//     in-flight request ctxs, etc.). This is a *broadcast*, not enforcement:
-//     goroutines watching <-ctx.Done() react and clean up their own
-//     resources (close listeners, stop tickers, return from run loops). Go
-//     has no SIGKILL equivalent for goroutines — cooperative cancellation
+//     and whatever the app derived from RootCtx). This is a *broadcast*, not
+//     enforcement: goroutines watching <-ctx.Done() react and clean up their
+//     own resources (close listeners, stop tickers, return from run loops).
+//     Go has no SIGKILL equivalent for goroutines — cooperative cancellation
 //     via context is the only way to wind them down.
+//
+//     In-flight HTTP request contexts are deliberately NOT in that cascade:
+//     they carry RootCtx's values but not its cancellation, because this step
+//     is what OPENS the graceful drain — killing the requests it exists to
+//     protect would defeat it. They are cancelled when the drain window
+//     closes, which is the moment grace has actually run out (web.Service.run,
+//     drain_timeout_secs).
 //
 //  2. c.TerminateServices() — sequential per-service Terminate calls. Each
 //     service's `Terminated` channel only fires from an explicit Terminate;

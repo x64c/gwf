@@ -16,6 +16,8 @@ type Service struct {
 	conf         ServerConf         // the server recipe (deadlines + drain window), validated by the loader
 	Ctx          context.Context    // per-cycle runtime context (set in Start)
 	cancel       context.CancelFunc // per-cycle cancel (set in Start)
+	reqCtx       context.Context    // per-cycle; parent of every request ctx — root's values, root's cancellation severed
+	cancelReq    context.CancelFunc // fires when the drain window closes (see run)
 	state        svc.State          // internal service state
 	terminated   chan error         // one-shot; fires when Terminate completes
 	stopped      chan struct{}      // per-cycle; closed when run goroutine has stopped
@@ -51,9 +53,14 @@ func (s *Service) Start(parentCtx context.Context) error {
 		return fmt.Errorf("cannot start: state is %v, must be READY", s.state)
 	}
 	log.Printf("[INFO][%s] Starting.", s.Name())
-	s.Server = s.conf.newHTTPServer(s.addr, s.handler) // fresh per cycle
 	s.Ctx, s.cancel = context.WithCancel(parentCtx)
-	s.stopped = make(chan struct{}) // fresh per cycle
+	// Request contexts inherit the root's VALUES but not its cancellation:
+	// cancelling the root opens the drain, and cancelling in-flight work at
+	// that same moment would defeat it. They are cancelled when the drain
+	// window closes instead — see run.
+	s.reqCtx, s.cancelReq = context.WithCancel(context.WithoutCancel(parentCtx))
+	s.Server = s.conf.newHTTPServer(s.addr, s.handler, s.reqCtx) // fresh per cycle
+	s.stopped = make(chan struct{})                              // fresh per cycle
 	s.state = svc.StateRUNNING
 	log.Printf("[INFO][%s] Running. (listening on %s)", s.Name(), s.addr)
 	go s.run()
@@ -125,8 +132,13 @@ func (s *Service) Terminated() <-chan error {
 }
 
 func (s *Service) run() {
+	// LIFO: cancelReq first — the drain below has closed by the time run
+	// returns, so a handler still in flight is cancelled and can unwind
+	// (release the connection, roll the transaction back) instead of being
+	// hard-killed at process exit. Then the state transition, then stopped.
 	defer close(s.stopped)
-	defer s.transitionAfterRun() // LIFO: runs first, before close(s.stopped)
+	defer s.transitionAfterRun()
+	defer s.cancelReq()
 
 	serverErr := make(chan error, 1)
 	go func() {
