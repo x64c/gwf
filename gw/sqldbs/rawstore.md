@@ -126,9 +126,37 @@ user/profile/select.sql        → "user.profile.select"
 user/profile/select.<dialect>  → "user.profile.select"  (specific driver only)
 ```
 
+## Identifier quoting — the rule that keeps `.sql` portable
+
+Dialects disagree about how to quote an identifier, and about which words need
+quoting at all. A shared `.sql` therefore has one rule:
+
+> **A shared `.sql` may name only identifiers that are unreserved in EVERY
+> dialect it will be loaded by, and must name them bare. Anything reserved in
+> even one dialect goes into dialect files.**
+
+Bare names are the portable form because quoting is where dialects differ:
+one spells it `` `x` ``, another `"x"`, and a name that needs neither parses
+everywhere. The rule is mechanical to check — intersect each engine's keyword
+list with your actual column names.
+
+Two traps make this worth stating rather than leaving to taste:
+
+- **The failure is silent in one direction.** A dialect that reads `"x"` as a
+  string literal answers a query for `"x"` with the constant `x`, once per row.
+  No error, no warning, wrong data.
+- **A connection setting is not a fix.** An engine may offer a mode that makes
+  its quoting match the standard, and it is tempting to enable it and use `"x"`
+  in shared files. That couples the meaning of committed SQL text to a runtime
+  setting somewhere else: the same file becomes correct or incorrect depending
+  on how a connection was configured, and a deployment that omits the setting
+  fails in the silent direction above. Dialect files carry their correctness
+  with them; connection modes do not.
+
 ## Author guideline
 
-- Write `.sql` for queries that work on every dialect (most CRUD).
+- Write `.sql` for queries that work on every dialect (most CRUD), naming
+  identifiers bare — see the quoting rule above.
 - Add a dialect-specific override (`.<dialect>` defined by the relevant
   driver) only when dialect-specific syntax is required for that key.
 - Don't pre-filter what each Client loads — let the helper broadcast.
