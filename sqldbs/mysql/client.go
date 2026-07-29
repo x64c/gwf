@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -46,11 +47,15 @@ func (c *Client) CreateDB(name string, rawConf jsontext.Value) error {
 	if c.conf.DSN != "" {
 		dsn = c.conf.DSN
 	} else {
+		// parseTime and loc are the scan layer's requirement, not a policy
+		// choice: time columns must arrive as time.Time in the app's zone.
+		// Everything else the connection should say is conf's to state.
 		dsn = fmt.Sprintf(
-			"%s:%s@tcp(%s:%d)/%s?parseTime=true&loc=%s&sql_mode=ANSI_QUOTES&multiStatements=true",
+			"%s:%s@tcp(%s:%d)/%s?parseTime=true&loc=%s%s",
 			c.conf.User, c.conf.PW,
 			c.conf.Host, c.conf.Port,
 			dbConf.DB, c.conf.TZ,
+			dsnParams(c.conf.Params),
 		)
 	}
 
@@ -152,4 +157,27 @@ func PrepareClients(appRoot string, clients map[string]sqldbs.Client) error {
 		clients[name] = NewClient(conf)
 	}
 	return nil
+}
+
+// dsnParams renders conf Params as DSN query parameters, sorted by key so the
+// same conf always produces the same DSN (a connection string that varies per
+// boot is one nobody can reason about). Values are written verbatim — see the
+// Params doc in clientconf.go.
+func dsnParams(params map[string]string) string {
+	if len(params) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(params))
+	for k := range params {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for _, k := range keys {
+		b.WriteByte('&')
+		b.WriteString(k)
+		b.WriteByte('=')
+		b.WriteString(params[k])
+	}
+	return b.String()
 }

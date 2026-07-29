@@ -4,7 +4,7 @@ go 1.26.5
 
 require (
 	github.com/jackc/pgx/v5 v5.10.0
-	github.com/x64c/gwf/gw v0.4.2
+	github.com/x64c/gwf/gw v0.4.3
 )
 
 require (
