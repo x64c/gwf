@@ -3,6 +3,7 @@ package framework
 import (
 	"encoding/json/v2"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -30,6 +31,15 @@ func (c *Core) PrepareWebService(addr string, httpHandler http.Handler) error {
 	if conf.DrainTimeoutSecs >= c.TerminateTimeoutSecs {
 		return fmt.Errorf("drain_timeout_secs (%d) must be less than terminate_timeout_secs (%d): a full drain could never finish inside the shutdown budget", conf.DrainTimeoutSecs, c.TerminateTimeoutSecs)
 	}
+	// Client-address resolution belongs to the web server — logging, audit and
+	// rate limiting all ask for it — so it is prepared here. Trusting nothing is
+	// a valid answer, and also the one that makes every request behind a proxy
+	// look like the proxy, so it is said out loud.
+	c.ClientIPResolver = conf.ClientIPResolver()
+	if c.ClientIPResolver.TrustedCount() == 0 {
+		log.Printf("[WARN][WebService] no trusted_proxy_cidrs: client address = connection peer, forwarding headers ignored.")
+	}
+
 	c.WebService = web.NewService(addr, httpHandler, conf)
 	c.AddService(c.WebService)
 	return nil

@@ -20,6 +20,7 @@ import (
 	"github.com/x64c/gwf/gw/uds"
 	"github.com/x64c/gwf/gw/web"
 	"github.com/x64c/gwf/gw/web/fwupstream"
+	"github.com/x64c/gwf/gw/web/requests"
 	"github.com/x64c/gwf/gw/web/session"
 )
 
@@ -35,6 +36,7 @@ type Core struct {
 	UDSService           *uds.Service                             `json:"-"`                      // PrepareUDSService
 	JobSchedulerService  *jobsched.Service                        `json:"-"`                      // PrepareJobSchedulerService
 	WebService           *web.Service                             `json:"-"`                      // PrepareWebService
+	ClientIPResolver     requests.ClientIPResolver                `json:"-"`                      // PrepareWebService — derives the caller's address per the deployment's trusted proxies
 	SessionService       *session.Service                         `json:"-"`                      // PrepareSessionService, PrepareCookieSessions, PrepareBearerSessions
 	ThrottleService      *throttle.Service                        `json:"-"`                      // PrepareThrottleService
 	VolatileKV           *sync.Map                                `json:"-"`                      // map[string]string

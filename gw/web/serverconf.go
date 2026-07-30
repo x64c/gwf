@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/http"
 	"time"
+
+	"github.com/x64c/gwf/gw/web/requests"
 )
 
 // ServerConf is the HTTP server's own configuration, loaded from
@@ -23,6 +25,15 @@ type ServerConf struct {
 	WriteTimeoutSecs      int `json:"write_timeout_secs"`       // REQUIRED (> 0). Deadline from end-of-header-read to the last response byte, so it bounds HANDLER time too. Must exceed the slowest legitimate response (report/PDF generation, long polls, streamed output).
 	IdleTimeoutSecs       int `json:"idle_timeout_secs"`        // REQUIRED (> 0). How long an idle keep-alive connection is kept open between requests. Shorter reclaims sockets from idle peers sooner; longer avoids a connection-pooling peer (browser, SDK, proxy upstream) racing to reuse a connection this server just closed.
 	DrainTimeoutSecs      int `json:"drain_timeout_secs"`       // REQUIRED (> 0, < core terminate_timeout_secs). Graceful-drain window for Server.Shutdown on stop — the grace period in-flight requests get to finish. A request may outlive it (write_timeout is the longer bound); when it closes, request contexts are cancelled so handlers can unwind instead of being hard-killed.
+
+	// TrustedProxyCIDRs lists the proxies allowed to state who the caller is.
+	// Optional; absent or empty means trust nothing, and the client address is
+	// then the connection's peer — honest, but behind an undeclared proxy every
+	// request resolves to that proxy. Entries are CIDRs with the prefix length
+	// written out ("127.0.0.1/32", "10.0.0.0/24", "::1/128"); a bare address is
+	// rejected at boot rather than assumed. See web.ClientIPResolver for why the
+	// rightmost forwarded entry is the trustworthy one.
+	TrustedProxyCIDRs []string `json:"trusted_proxy_cidrs"`
 }
 
 // Validate checks this conf's own invariants. Cross-layer relations — the
@@ -47,7 +58,17 @@ func (c ServerConf) Validate() error {
 	if c.ReadHeaderTimeoutSecs > c.ReadTimeoutSecs {
 		return fmt.Errorf("read_header_timeout_secs (%d) must not exceed read_timeout_secs (%d): the whole-request deadline would fire first, leaving the header deadline dead", c.ReadHeaderTimeoutSecs, c.ReadTimeoutSecs)
 	}
+	if _, err := requests.NewClientIPResolver(c.TrustedProxyCIDRs); err != nil {
+		return fmt.Errorf("trusted_proxy_cidrs in .web-server.json: %w (write the prefix length, e.g. 127.0.0.1/32)", err)
+	}
 	return nil
+}
+
+// ClientIPResolver builds the resolver this conf describes. Validate has
+// already rejected malformed entries, so this cannot fail.
+func (c ServerConf) ClientIPResolver() requests.ClientIPResolver {
+	rs, _ := requests.NewClientIPResolver(c.TrustedProxyCIDRs)
+	return rs
 }
 
 // newHTTPServer builds the *http.Server this conf describes. One place maps
