@@ -2,20 +2,81 @@ package svc
 
 import "context"
 
+// Service is a lifecycle-managed component of an app.
+//
+// A service has two parts, and the lifecycle only ever governs the first:
+//
+//   - the ACTIVE part — its goroutines: a cleanup ticker, a scheduler loop, a
+//     listener;
+//   - the PASSIVE part — its in-memory state and the methods others call on
+//     it: bucket groups, session locks, a command store.
+//
+// Read the three transitions in those terms:
+//
+//	Start      begins or RESUMES the active part.
+//	Stop       PAUSES it. The passive part survives untouched, which is
+//	           exactly what makes Start able to resume.
+//	Terminate  ends the service for good.
+//
+// STOP IS A PAUSE, NOT AN OFF SWITCH. A stopped service still holds everything
+// it held, and every method on it still works: halting a cleanup ticker does
+// not empty the map it was cleaning. The name is kept for familiarity, but a
+// service that is "stopped" is one whose goroutines are idle, not one that has
+// gone away.
+//
+// AND NO STATE MAKES A SERVICE UNREACHABLE. Callers hold pointers; nothing in
+// the runtime revokes them, so Stop and Terminate cannot prevent a call. Two
+// consequences an implementation must honour:
+//
+//   - reachability is not the service's to control. Whether a caller may use
+//     it is decided in front of the pointer, by the framework, which can tell
+//     a caller "unavailable" in terms that caller understands. A method that
+//     answers that question itself is inventing a second, divergent verdict —
+//     and if its return type cannot express "unavailable", it will get it
+//     wrong (a rate limiter returning "allowed" while stopped is the canonical
+//     case).
+//   - a method must therefore stay SAFE to call after Stop or Terminate:
+//     returning stale results is acceptable, panicking or blocking forever is
+//     not. The framework can stop new callers; only the service can survive
+//     the ones already inside.
+//
+// It follows that a service must not hand out anything callable that bypasses
+// this — an internal pointer escaping through an exported accessor is a door
+// with no gate on it. Return a snapshot, or return something that consults the
+// same authority the framework does.
 type Service interface {
 	Name() string
 	State() State
 
-	// Start transitions READY → RUNNING. parentCtx is the runtime cancellation
-	// lineage (typically Core.RootCtx); the service derives its own per-cycle
-	// context from it. Returns a bootstrap error if start fails.
+	// Start transitions READY → RUNNING, whether that is the first start or a
+	// resume after Stop — the transition is the same either way. parentCtx is
+	// the runtime cancellation lineage (typically Core.RootCtx); the service
+	// derives its own per-cycle context from it.
+	//
+	// HONEST: return only once the service has genuinely started. Everything
+	// that can fail — binding a port, opening a socket, acquiring a lease —
+	// must be done and checked BEFORE returning nil. Reporting success and
+	// then failing asynchronously makes every downstream guarantee a lie: the
+	// framework marks the service RUNNING and admitted, its dependents start
+	// against it, and the failure surfaces only as a log line nobody is
+	// waiting for.
+	//
+	// ATOMIC: a failed start leaves nothing behind. Release whatever was
+	// acquired before the failing step and return an error. The framework
+	// rolls back the services that DID start; it cannot clean up inside one
+	// that half-started, and cannot tell that case apart from a clean failure.
+	//
+	// (A future addition, tied to starting siblings concurrently: an operation
+	// context so an in-flight Start can be canceled when a sibling fails,
+	// instead of being waited for only to be torn down.)
 	Start(parentCtx context.Context) error
 
-	// Stop transitions RUNNING → STOPPING (immediate) → READY (when the run
-	// goroutine has exited). Synchronous: returns after the goroutine has
-	// finished. ctx is the operation deadline; if it expires before exit, Stop
-	// returns ctx.Err() and the service eventually reaches READY when the run
-	// goroutine finally exits.
+	// Stop PAUSES the service: RUNNING → STOPPING (immediate) → READY (when the
+	// run goroutine has exited). The passive state is preserved and the service
+	// stays callable — see the type doc. Synchronous: returns after the
+	// goroutine has finished. ctx is the operation deadline; if it expires
+	// before exit, Stop returns ctx.Err() and the service eventually reaches
+	// READY when the run goroutine finally exits.
 	Stop(ctx context.Context) error
 
 	// Terminate transitions any state → TERMINATING (immediate, irreversible).
@@ -42,7 +103,7 @@ type Service interface {
 	//       case svc.StateRUNNING:
 	//           err = s.stop(ctx)        // full stop activity (cancel + wait + logs)
 	//       case svc.StateSTOPPING:
-	//           err = s.waitStopped(ctx) // wait only — Stop already cancelled
+	//           err = s.waitStopped(ctx) // wait only — Stop already canceled
 	//       }
 	//       return err
 	//   }

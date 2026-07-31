@@ -11,6 +11,7 @@ import (
 )
 
 type Service struct {
+	name             string             // registered instance identity; see NewServiceAs
 	Ctx              context.Context    // per-cycle runtime context (set in Start)
 	cancel           context.CancelFunc // per-cycle cancel (set in Start)
 	state            svc.AtomicState    // internal service state (read on the request path via Allow)
@@ -22,7 +23,7 @@ type Service struct {
 }
 
 func (s *Service) Name() string {
-	return "ThrottleService"
+	return s.name
 }
 
 func (s *Service) State() svc.State {
@@ -30,7 +31,16 @@ func (s *Service) State() svc.State {
 }
 
 func NewService(cleanupCycle time.Duration, cleanupOlderThan time.Duration) *Service {
+	return NewServiceAs("ThrottleService", cleanupCycle, cleanupOlderThan)
+}
+
+// NewServiceAs is NewService with the name given explicitly. A name identifies
+// a registered INSTANCE, not a type: it is what logs, status output and
+// dependency declarations all refer to, and registration rejects a duplicate.
+// The string is taken raw — uniqueness and legibility are the caller's.
+func NewServiceAs(name string, cleanupCycle time.Duration, cleanupOlderThan time.Duration) *Service {
 	s := &Service{
+		name:             name,
 		terminated:       make(chan error, 1),
 		cleanupCycle:     cleanupCycle,
 		cleanupOlderThan: cleanupOlderThan,
@@ -73,7 +83,7 @@ func (s *Service) Stop(ctx context.Context) error {
 }
 
 // Terminate : any → TERMINATING (irreversible). If currently RUNNING, runs
-// the full stop activity. If STOPPING (Stop already cancelled, possibly
+// the full stop activity. If STOPPING (Stop already canceled, possibly
 // timed out), just waits for the run goroutine to actually exit. Fires
 // Terminated when complete.
 func (s *Service) Terminate(ctx context.Context) (err error) {

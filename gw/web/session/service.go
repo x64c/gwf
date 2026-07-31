@@ -26,6 +26,7 @@ import (
 // The age filter keeps the cleanup work proportional to the count of likely-
 // stale entries, not the total entry count.
 type Service struct {
+	name             string             // registered instance identity; see NewServiceAs
 	Ctx              context.Context    // per-cycle runtime context (set in Start)
 	cancel           context.CancelFunc // per-cycle cancel (set in Start)
 	state            svc.AtomicState    // internal service state (read on the request path by the session middleware)
@@ -44,7 +45,7 @@ type Service struct {
 }
 
 func (s *Service) Name() string {
-	return "SessionService"
+	return s.name
 }
 
 func (s *Service) State() svc.State {
@@ -52,7 +53,16 @@ func (s *Service) State() svc.State {
 }
 
 func NewService(kvdb kvdbs.DB, cleanupCycle time.Duration, cleanupOlderThan time.Duration) *Service {
+	return NewServiceAs("SessionService", kvdb, cleanupCycle, cleanupOlderThan)
+}
+
+// NewServiceAs is NewService with the name given explicitly. A name identifies
+// a registered INSTANCE, not a type: it is what logs, status output and
+// dependency declarations all refer to, and registration rejects a duplicate.
+// The string is taken raw — uniqueness and legibility are the caller's.
+func NewServiceAs(name string, kvdb kvdbs.DB, cleanupCycle time.Duration, cleanupOlderThan time.Duration) *Service {
 	s := &Service{
+		name:             name,
 		terminated:       make(chan error, 1),
 		cleanupCycle:     cleanupCycle,
 		cleanupOlderThan: cleanupOlderThan,

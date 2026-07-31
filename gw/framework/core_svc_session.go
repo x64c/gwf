@@ -14,6 +14,11 @@ func (c *Core) PrepareSessionService(cleanupCycle time.Duration, cleanupOlderTha
 		return errors.New("main kvdb not ready")
 	}
 	c.SessionService = session.NewService(c.MainKVDB, cleanupCycle, cleanupOlderThan)
-	c.AddService(c.SessionService)
+	// No dependency to declare: the KVDB it is built with is an infrastructure
+	// client, not a service, so nothing in the graph has to outlive it or
+	// precede it on that account.
+	if _, err := c.RegisterService(c.SessionService); err != nil {
+		return err
+	}
 	return nil
 }

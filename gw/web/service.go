@@ -5,27 +5,30 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 
 	"github.com/x64c/gwf/gw/svc"
 )
 
 type Service struct {
-	addr         string             // preserved across cycles for *http.Server rebuild
-	handler      http.Handler       // preserved across cycles
-	conf         ServerConf         // the server recipe (deadlines + drain window), validated by the loader
-	Ctx          context.Context    // per-cycle runtime context (set in Start)
-	cancel       context.CancelFunc // per-cycle cancel (set in Start)
-	reqCtx       context.Context    // per-cycle; parent of every request ctx — root's values, root's cancellation severed
-	cancelReq    context.CancelFunc // fires when the drain window closes (see run)
-	state        svc.State          // internal service state
-	terminated   chan error         // one-shot; fires when Terminate completes
-	stopped      chan struct{}      // per-cycle; closed when run goroutine has stopped
-	Server       *http.Server       // rebuilt each Start cycle (one-shot after Shutdown)
+	name       string             // registered instance identity; see NewServiceAs
+	addr       string             // preserved across cycles for *http.Server rebuild
+	handler    http.Handler       // preserved across cycles
+	conf       ServerConf         // the server recipe (deadlines + drain window), validated by the loader
+	Ctx        context.Context    // per-cycle runtime context (set in Start)
+	cancel     context.CancelFunc // per-cycle cancel (set in Start)
+	reqCtx     context.Context    // per-cycle; parent of every request ctx — root's values, root's cancellation severed
+	cancelReq  context.CancelFunc // fires when the drain window closes (see run)
+	state      svc.State          // internal service state
+	terminated chan error         // one-shot; fires when Terminate completes
+	stopped    chan struct{}      // per-cycle; closed when run goroutine has stopped
+	listener   net.Listener       // per-cycle; bound by Start, so a bind failure fails the start
+	Server     *http.Server       // rebuilt each Start cycle (one-shot after Shutdown)
 }
 
 func (s *Service) Name() string {
-	return "WebService"
+	return s.name
 }
 
 func (s *Service) State() svc.State {
@@ -33,7 +36,16 @@ func (s *Service) State() svc.State {
 }
 
 func NewService(addr string, httpHandler http.Handler, conf ServerConf) *Service {
+	return NewServiceAs("WebService", addr, httpHandler, conf)
+}
+
+// NewServiceAs is NewService with the name given explicitly. A name identifies
+// a registered INSTANCE, not a type: it is what logs, status output and
+// dependency declarations all refer to, and registration rejects a duplicate.
+// The string is taken raw — uniqueness and legibility are the caller's.
+func NewServiceAs(name string, addr string, httpHandler http.Handler, conf ServerConf) *Service {
 	return &Service{
+		name:       name,
 		addr:       addr,
 		handler:    httpHandler,
 		conf:       conf,
@@ -43,8 +55,18 @@ func NewService(addr string, httpHandler http.Handler, conf ServerConf) *Service
 }
 
 // Start : READY → RUNNING. Builds a fresh *http.Server (the previous one is
-// dead after Shutdown), binds the port, and serves.
+// dead after Shutdown), BINDS THE PORT, and hands the listener to run.
 // Lifecycle methods (Start/Stop/Terminate) are not safe to call concurrently.
+//
+// The bind happens HERE, and that is the whole point of this ordering. It used
+// to happen inside the run goroutine, so Start set RUNNING, logged "listening
+// on …", and returned nil before anything was bound — a port conflict then
+// surfaced as an asynchronous [ERROR] while the service reported RUNNING for
+// the life of the process with nothing listening, and the boot was "successful".
+// Nothing may claim to have started until the step that can fail has succeeded.
+//
+// Atomic on failure: the contexts created above are canceled before returning,
+// so a failed start leaves nothing behind for anyone to clean up.
 func (s *Service) Start(parentCtx context.Context) error {
 	if s.state == svc.StateRUNNING {
 		return nil // idempotent
@@ -55,12 +77,20 @@ func (s *Service) Start(parentCtx context.Context) error {
 	log.Printf("[INFO][%s] Starting.", s.Name())
 	s.Ctx, s.cancel = context.WithCancel(parentCtx)
 	// Request contexts inherit the root's VALUES but not its cancellation:
-	// cancelling the root opens the drain, and cancelling in-flight work at
-	// that same moment would defeat it. They are cancelled when the drain
+	// canceling the root opens the drain, and canceling in-flight work at
+	// that same moment would defeat it. They are canceled when the drain
 	// window closes instead — see run.
 	s.reqCtx, s.cancelReq = context.WithCancel(context.WithoutCancel(parentCtx))
 	s.Server = s.conf.newHTTPServer(s.addr, s.handler, s.reqCtx) // fresh per cycle
-	s.stopped = make(chan struct{})                              // fresh per cycle
+
+	ln, err := net.Listen("tcp", s.addr)
+	if err != nil {
+		s.cancel()
+		s.cancelReq()
+		return fmt.Errorf("listen(%q) failed: %w", s.addr, err)
+	}
+	s.listener = ln                 // fresh per cycle
+	s.stopped = make(chan struct{}) // fresh per cycle
 	s.state = svc.StateRUNNING
 	log.Printf("[INFO][%s] Running. (listening on %s)", s.Name(), s.addr)
 	go s.run()
@@ -133,7 +163,7 @@ func (s *Service) Terminated() <-chan error {
 
 func (s *Service) run() {
 	// LIFO: cancelReq first — the drain below has closed by the time run
-	// returns, so a handler still in flight is cancelled and can unwind
+	// returns, so a handler still in flight is canceled and can unwind
 	// (release the connection, roll the transaction back) instead of being
 	// hard-killed at process exit. Then the state transition, then stopped.
 	defer close(s.stopped)
@@ -142,7 +172,9 @@ func (s *Service) run() {
 
 	serverErr := make(chan error, 1)
 	go func() {
-		if err := s.Server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		// Serve, not ListenAndServe: the listener was bound by Start, so by the
+		// time this runs the only failures left are serving failures.
+		if err := s.Server.Serve(s.listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErr <- err
 		} else {
 			serverErr <- nil

@@ -41,6 +41,24 @@ func (c *Core) PrepareWebService(addr string, httpHandler http.Handler) error {
 	}
 
 	c.WebService = web.NewService(addr, httpHandler, conf)
-	c.AddService(c.WebService)
+	// The web subsystem ships middleware that may reach for these, and it
+	// cannot know which of it the app actually mounted — the route tree arrives
+	// as an opaque handler. So it declares the POSSIBILITY. Over-declaring
+	// costs one ordering constraint; under-declaring is the defect this graph
+	// exists to prevent, so the conservative direction is the correct one.
+	//
+	// Named from the registered instances rather than from string literals: a
+	// service registered under a name of the app's choosing still matches, and
+	// one the app never prepared contributes no dependency at all.
+	deps := make([]ServiceDep, 0, 2)
+	if c.ThrottleService != nil {
+		deps = append(deps, MayUse(c.ThrottleService.Name()))
+	}
+	if c.SessionService != nil {
+		deps = append(deps, MayUse(c.SessionService.Name()))
+	}
+	if _, err = c.RegisterService(c.WebService, deps...); err != nil {
+		return err
+	}
 	return nil
 }

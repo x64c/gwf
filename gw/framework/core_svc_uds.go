@@ -19,6 +19,13 @@ func (c *Core) PrepareUDSService(cmdStore *uds.CommandStore) error {
 		return err
 	}
 	c.UDSService = uds.NewService(conf, cmdStore)
-	c.AddService(c.UDSService)
+	// The admin socket depends on no service. Its commands reach into others to
+	// report on them, which is observation, not dependence: forcing an edge
+	// there would order it as a dependent of everything it inspects, so it
+	// would start last and terminate first — losing the observer exactly when a
+	// hanging boot or a slow drain is the thing worth watching.
+	if _, err = c.RegisterService(c.UDSService); err != nil {
+		return err
+	}
 	return nil
 }

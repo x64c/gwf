@@ -24,7 +24,7 @@ type ServerConf struct {
 	ReadTimeoutSecs       int `json:"read_timeout_secs"`        // REQUIRED (>= read_header_timeout_secs). Deadline for reading the WHOLE request, headers plus body. Must exceed the slowest legitimate upload on the slowest supported connection.
 	WriteTimeoutSecs      int `json:"write_timeout_secs"`       // REQUIRED (> 0). Deadline from end-of-header-read to the last response byte, so it bounds HANDLER time too. Must exceed the slowest legitimate response (report/PDF generation, long polls, streamed output).
 	IdleTimeoutSecs       int `json:"idle_timeout_secs"`        // REQUIRED (> 0). How long an idle keep-alive connection is kept open between requests. Shorter reclaims sockets from idle peers sooner; longer avoids a connection-pooling peer (browser, SDK, proxy upstream) racing to reuse a connection this server just closed.
-	DrainTimeoutSecs      int `json:"drain_timeout_secs"`       // REQUIRED (> 0, < core terminate_timeout_secs). Graceful-drain window for Server.Shutdown on stop — the grace period in-flight requests get to finish. A request may outlive it (write_timeout is the longer bound); when it closes, request contexts are cancelled so handlers can unwind instead of being hard-killed.
+	DrainTimeoutSecs      int `json:"drain_timeout_secs"`       // REQUIRED (> 0, < core terminate_timeout_secs). Graceful-drain window for Server.Shutdown on stop — the grace period in-flight requests get to finish. A request may outlive it (write_timeout is the longer bound); when it closes, request contexts are canceled so handlers can unwind instead of being hard-killed.
 
 	// TrustedProxyCIDRs lists the proxies allowed to state who the caller is.
 	// Optional; absent or empty means trust nothing, and the client address is

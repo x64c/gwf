@@ -12,6 +12,7 @@ import (
 )
 
 type Service struct {
+	name        string             // registered instance identity; see NewServiceAs
 	Ctx         context.Context    // per-cycle runtime context (set in Start)
 	cancel      context.CancelFunc // per-cycle cancel (set in Start)
 	state       svc.State          // internal service state
@@ -31,7 +32,7 @@ type Service struct {
 }
 
 func (s *Service) Name() string {
-	return "JobSchedulerService"
+	return s.name
 }
 
 func (s *Service) State() svc.State {
@@ -39,7 +40,16 @@ func (s *Service) State() svc.State {
 }
 
 func NewService() *Service {
+	return NewServiceAs("JobSchedulerService")
+}
+
+// NewServiceAs is NewService with the name given explicitly. A name identifies
+// a registered INSTANCE, not a type: it is what logs, status output and
+// dependency declarations all refer to, and registration rejects a duplicate.
+// The string is taken raw — uniqueness and legibility are the caller's.
+func NewServiceAs(name string) *Service {
 	return &Service{
+		name:        name,
 		state:       svc.StateREADY,
 		terminated:  make(chan error, 1),
 		oneTimeJobs: make(map[int64][]*OneTimeJob),

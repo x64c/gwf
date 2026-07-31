@@ -10,10 +10,19 @@ import "log"
 //	c.WaitServicesTerminated()  // block until all have terminated (via signal handler → Terminate)
 //	c.ResourceCleanUp()         // close infrastructure clients (KVDB, SQL DB, ...)
 //
-// Returns the first error encountered. On StartServices failure, ResourceCleanUp
-// is intentionally NOT called — preserving the current behaviour where a failed
-// boot leaves partially-prepared infrastructure to the OS. Closing the leak is
-// a separate decision (likely paired with a registry-driven cleanup refactor).
+// Returns the first error encountered. A FAILED BOOT NOW RELEASES EVERYTHING:
+// StartServices tears down whatever it had already started, and ResourceCleanUp
+// then closes the infrastructure clients — services first, clients second, for
+// the same reason the shutdown walk is ordered at all (releasing a DB while a
+// service that uses it is still tearing down would break the teardown).
+//
+// That reverses the earlier behavior, where a failed boot deliberately left
+// partially-prepared infrastructure to the OS. Process exit does reclaim file
+// descriptors, but nothing was released *gracefully*: DB sessions lingered
+// server-side until timeout, nothing flushed, and anything a service acquired
+// stayed acquired — and in a host that owns its own exit, nothing was reclaimed
+// at all. A process that will not run should leave nothing running and nothing
+// open.
 //
 // A shutdown that abandoned work (a service missed its terminate deadline)
 // returns that error too, and apps should exit non-zero on it (log.Fatalf):
@@ -23,6 +32,7 @@ import "log"
 func (c *Core) Run() error {
 	log.Printf("[INFO][%s] app.Run()", c.AppName)
 	if err := c.StartServices(); err != nil {
+		c.ResourceCleanUp() // services were already unwound by StartServices
 		return err
 	}
 	err := c.WaitServicesTerminated()

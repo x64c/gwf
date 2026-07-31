@@ -26,7 +26,7 @@ var once sync.Once
 //     In-flight HTTP request contexts are deliberately NOT in that cascade:
 //     they carry RootCtx's values but not its cancellation, because this step
 //     is what OPENS the graceful drain — killing the requests it exists to
-//     protect would defeat it. They are cancelled when the drain window
+//     protect would defeat it. They are canceled when the drain window
 //     closes, which is the moment grace has actually run out (web.Service.run,
 //     drain_timeout_secs).
 //
