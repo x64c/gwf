@@ -45,7 +45,7 @@ func handleLifecycle(rootCtx context.Context, s svc.Service, subcmd string, args
 // stopCtx derives the Stop operation context from rootCtx.
 //
 // By default there is NO deadline: Stop runs to completion, bounded only by app
-// shutdown (rootCtx cancelling cascades in). A default timeout is deliberately
+// shutdown (rootCtx canceling cascades in). A default timeout is deliberately
 // avoided — it could cut off a legitimately long Stop (e.g. tearing down real
 // resources). The operator opts into a hard bound with "--ttl <duration>".
 func stopCtx(rootCtx context.Context, args []string) (context.Context, context.CancelFunc) {
