@@ -24,12 +24,22 @@ type Client struct {
 	dbs    map[string]*DB
 }
 
-func NewClient(conf ClientConf) *Client {
+// NewClient validates the conf and constructs the client. ALL pool
+// misconfiguration — a missing block, a missing field, an incoherent value, a
+// DSN carrying pool_* beside the pool block — is a construction (= boot)
+// error.
+func NewClient(conf ClientConf) (*Client, error) {
+	if err := conf.Pool.validate(); err != nil {
+		return nil, err
+	}
+	if err := validateDSNCarriesNoPoolParams(conf.DSN); err != nil {
+		return nil, err
+	}
 	return &Client{
 		conf:   conf,
 		stores: make(map[string]*sqldbs.RawSQLStore),
 		dbs:    make(map[string]*DB),
-	}
+	}, nil
 }
 
 func (c *Client) CreateDB(name string, rawConf jsontext.Value) error {
@@ -59,10 +69,13 @@ func (c *Client) CreateDB(name string, rawConf jsontext.Value) error {
 	if err != nil {
 		return fmt.Errorf("pgsql db %q: failed to parse pgx config: %w", name, err)
 	}
-	// Pool tuning _ ToDo: get these values from conf
-	config.MaxConns = 10
-	config.MinConns = 2
-	config.MaxConnLifetime = 3 * time.Minute
+	// Pool tuning comes from the conf's REQUIRED pool block — the single
+	// source, validated at NewClient. The DSN cannot carry pool_* (refused at
+	// construction), so nothing here overwrites a stated value.
+	config.MaxConns = *c.conf.Pool.MaxConns
+	config.MinConns = *c.conf.Pool.MinConns
+	config.MaxConnLifetime = time.Duration(*c.conf.Pool.ConnMaxLifetimeSecs) * time.Second
+	config.MaxConnIdleTime = time.Duration(*c.conf.Pool.ConnMaxIdleTimeSecs) * time.Second
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -169,7 +182,11 @@ func PrepareClients(appRoot string, clients map[string]sqldbs.Client) error {
 		return err
 	}
 	for name, conf := range confs {
-		clients[name] = NewClient(conf)
+		client, err := NewClient(conf)
+		if err != nil {
+			return fmt.Errorf("pgsql client %q: %w", name, err)
+		}
+		clients[name] = client
 	}
 	return nil
 }

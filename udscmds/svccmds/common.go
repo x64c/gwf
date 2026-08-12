@@ -10,36 +10,53 @@ import (
 	"io"
 	"time"
 
-	"github.com/x64c/gwf/gw/svc"
+	"github.com/x64c/gwf/gw/framework"
 )
 
 // lifecycleUsage is the shared Usage() text for the lifecycle-only svc-cmds.
 const lifecycleUsage = "start | stop [--ttl <dur>] | status"
 
-// handleLifecycle dispatches start/stop/status for a plain svc.Service. rootCtx
-// is the runtime parent: Start derives the service's lifetime from it, and the
-// Stop op-ctx is derived from it too (so app shutdown cascades into a Stop) —
-// see stopCtx. Shared by the lifecycle-only svc-cmds (throttle, web, jobsched)
-// and uds.
-func handleLifecycle(rootCtx context.Context, s svc.Service, subcmd string, args []string, w io.Writer) error {
+// handleLifecycle dispatches start/stop/status for one registered service,
+// through Core's operator ops so ADMISSION follows the action: stop revokes it
+// before the service pauses, start grants it back on success. Calling
+// Start/Stop on the raw service instead would move the phase and leave the
+// app-level verdict behind — every gated consumer would keep its old answer.
+//
+// The Stop op-ctx derives from Core's RootCtx (so app shutdown cascades into a
+// Stop) — see stopCtx. Shared by the lifecycle-only svc-cmds (throttle, web,
+// jobsched, uds) and by session's lifecycle half.
+func handleLifecycle(appCore *framework.Core, n *framework.ServiceNode, subcmd string, args []string, w io.Writer) error {
+	if err := doLifecycle(appCore, n, subcmd, args); err != nil {
+		return err
+	}
+	printLifecycleStatus(n, w)
+	return nil
+}
+
+// doLifecycle runs the lifecycle action without printing — for svc-cmds with
+// their own status shape (session). "status" is a no-op: the caller prints.
+func doLifecycle(appCore *framework.Core, n *framework.ServiceNode, subcmd string, args []string) error {
 	switch subcmd {
 	case "start":
-		if err := s.Start(rootCtx); err != nil {
-			return err
-		}
+		return appCore.StartServiceNode(n)
 	case "stop":
-		opCtx, cancel := stopCtx(rootCtx, args)
+		opCtx, cancel := stopCtx(appCore.RootCtx, args)
 		defer cancel()
-		if err := s.Stop(opCtx); err != nil {
-			return err
-		}
+		return appCore.StopServiceNode(opCtx, n)
 	case "status":
-		// fall through to status print
+		return nil
 	default:
 		return fmt.Errorf("unknown subcommand %q (supported: start, stop, status)", subcmd)
 	}
-	_, _ = fmt.Fprintf(w, "%s: %s\n", s.Name(), s.State())
-	return nil
+}
+
+// printLifecycleStatus prints one service's phase beside the app-level verdict.
+// The two legitimately differ (svc.Service vs ServiceNode): a stopped service
+// still reports its own phase while admission — what gated consumers actually
+// ask — is already false.
+func printLifecycleStatus(n *framework.ServiceNode, w io.Writer) {
+	s := n.Service()
+	_, _ = fmt.Fprintf(w, "%s: %s (admitted=%v)\n", s.Name(), s.State(), n.Admitted())
 }
 
 // stopCtx derives the Stop operation context from rootCtx.

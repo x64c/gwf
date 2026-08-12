@@ -26,12 +26,18 @@ type Client struct {
 	dbs    map[string]*DB
 }
 
-func NewClient(conf ClientConf) *Client {
+// NewClient validates the conf and constructs the client. ALL pool
+// misconfiguration — a missing block, a missing field, an incoherent value —
+// is a construction (= boot) error.
+func NewClient(conf ClientConf) (*Client, error) {
+	if err := conf.Pool.validate(); err != nil {
+		return nil, err
+	}
 	return &Client{
 		conf:   conf,
 		stores: make(map[string]*sqldbs.RawSQLStore),
 		dbs:    make(map[string]*DB),
-	}
+	}, nil
 }
 
 func (c *Client) CreateDB(name string, rawConf jsontext.Value) error {
@@ -63,10 +69,13 @@ func (c *Client) CreateDB(name string, rawConf jsontext.Value) error {
 	if err != nil {
 		return fmt.Errorf("mysql db %q: %w", name, err)
 	}
-	// ToDo: get these values from conf
-	conn.SetConnMaxLifetime(3 * time.Minute)
-	conn.SetMaxOpenConns(10)
-	conn.SetMaxIdleConns(10)
+	// Pool tuning comes from the conf's REQUIRED pool block — the single
+	// source, validated at NewClient. All four dials are stated; none is a
+	// framework number.
+	conn.SetConnMaxLifetime(time.Duration(*c.conf.Pool.ConnMaxLifetimeSecs) * time.Second)
+	conn.SetConnMaxIdleTime(time.Duration(*c.conf.Pool.ConnMaxIdleTimeSecs) * time.Second)
+	conn.SetMaxOpenConns(*c.conf.Pool.MaxOpenConns)
+	conn.SetMaxIdleConns(*c.conf.Pool.MaxIdleConns)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -170,7 +179,11 @@ func PrepareClients(appRoot string, clients map[string]sqldbs.Client) error {
 		return err
 	}
 	for name, conf := range confs {
-		clients[name] = NewClient(conf)
+		client, err := NewClient(conf)
+		if err != nil {
+			return fmt.Errorf("mysql client %q: %w", name, err)
+		}
+		clients[name] = client
 	}
 	return nil
 }

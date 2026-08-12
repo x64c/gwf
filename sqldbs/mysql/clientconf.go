@@ -9,6 +9,7 @@ type ClientConf struct {
 	TZ     string            `json:"tz"`
 	Params map[string]string `json:"params"` // extra DSN parameters — MySQL's own knobs, see below
 	DSN    string            `json:"dsn"`    // To overwrite default DSN building — bypasses Params too
+	Pool   *PoolConf         `json:"pool"`   // REQUIRED — see PoolConf
 }
 
 // Params are appended to the generated DSN verbatim, sorted by key so one conf

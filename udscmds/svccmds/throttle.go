@@ -23,9 +23,8 @@ func (h *Throttle) Rename(name string) { h.name = name }
 func (h *Throttle) Usage() string      { return lifecycleUsage }
 func (h *Throttle) Handle(subcmd string, args []string, w io.Writer) error {
 	appCore := h.AppProvider().AppCore()
-	s := appCore.ThrottleService
-	if s == nil {
+	if appCore.ThrottleService == nil {
 		return fmt.Errorf("%s service not configured in this app", h.Name())
 	}
-	return handleLifecycle(appCore.RootCtx, s, subcmd, args, w)
+	return handleLifecycle(appCore, appCore.ThrottleHandle().Node(), subcmd, args, w)
 }

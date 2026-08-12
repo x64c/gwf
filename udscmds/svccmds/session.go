@@ -35,31 +35,28 @@ func (h *Session) Handle(subcmd string, args []string, w io.Writer) error {
 	if s == nil {
 		return fmt.Errorf("%s service not configured in this app", h.Name())
 	}
+	node := appCore.SessionHandle().Node()
 	switch subcmd {
-	case "start":
-		if err := s.Start(appCore.RootCtx); err != nil {
-			return err
-		}
-	case "stop":
-		opCtx, cancel := stopCtx(appCore.RootCtx, args)
-		defer cancel()
-		if err := s.Stop(opCtx); err != nil {
+	case "start", "stop":
+		// Lifecycle goes through Core's operator ops so admission follows the
+		// action; the session-specific status shape prints below.
+		if err := doLifecycle(appCore, node, subcmd, args); err != nil {
 			return err
 		}
 	case "enable":
-		return setSessionProtocol(s, args, true, w)
+		return setSessionProtocol(node, s, args, true, w)
 	case "disable":
-		return setSessionProtocol(s, args, false, w)
+		return setSessionProtocol(node, s, args, false, w)
 	case "status":
 		// fall through to status print
 	default:
 		return fmt.Errorf("unknown subcommand %q (supported: start, stop, status, enable <protocol>, disable <protocol>)", subcmd)
 	}
-	printSessionStatus(s, w)
+	printSessionStatus(node, s, w)
 	return nil
 }
 
-func setSessionProtocol(s *session.Service, args []string, enable bool, w io.Writer) error {
+func setSessionProtocol(n *framework.ServiceNode, s *session.Service, args []string, enable bool, w io.Writer) error {
 	names := sessionProtocolNames(s)
 	if len(args) < 1 {
 		return fmt.Errorf("missing protocol name (configured: %s)", strings.Join(names, ", "))
@@ -73,7 +70,7 @@ func setSessionProtocol(s *session.Service, args []string, enable bool, w io.Wri
 	} else {
 		p.Disable()
 	}
-	printSessionStatus(s, w)
+	printSessionStatus(n, s, w)
 	return nil
 }
 
@@ -104,16 +101,17 @@ func sessionProtocolNames(s *session.Service) []string {
 	return names
 }
 
-func printSessionStatus(s *session.Service, w io.Writer) {
-	_, _ = fmt.Fprintf(w, "%s: %s\n", s.Name(), s.State())
+func printSessionStatus(n *framework.ServiceNode, s *session.Service, w io.Writer) {
+	printLifecycleStatus(n, w)
 	for _, name := range sessionProtocolNames(s) {
 		p := sessionProtocol(s, name)
 		enabled := "disabled"
 		if p.Enabled() {
 			enabled = "enabled"
 		}
+		// "serving" is the wrapper gate's actual verdict: admitted && enabled.
 		serving := "not-serving"
-		if s.Serving(p) {
+		if n.Admitted() && p.Enabled() {
 			serving = "serving"
 		}
 		_, _ = fmt.Fprintf(w, "  %s: %s (%s)\n", name, enabled, serving)
