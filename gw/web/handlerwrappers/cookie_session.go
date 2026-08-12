@@ -11,8 +11,10 @@ import (
 
 // CookieSession gates an endpoint on the cookie session protocol being in
 // service. It rejects with 503 SessionServiceUnavailable when the protocol
-// isn't serving — the session service is stopped, or the cookie protocol is
-// disabled — and otherwise passes the request through unchanged.
+// isn't serving — the session service is not admitted for use (its framework
+// handle answers the lifecycle question), or the cookie protocol is disabled
+// (the manager's own switch) — and otherwise passes the request through
+// unchanged.
 //
 // It produces no SessionData. CookieUserSession is this gate plus user-identity
 // resolution; use CookieSession on routes that depend on the cookie subsystem
@@ -23,13 +25,15 @@ type CookieSession struct {
 }
 
 func (m *CookieSession) Wrap(inner http.Handler) http.Handler {
-	sessSvc := m.AppProvider().AppCore().SessionService
+	appCore := m.AppProvider().AppCore()
+	sessSvc := appCore.SessionService
 	if sessSvc == nil || sessSvc.CookieSessionManager == nil {
 		log.Fatal("[ERROR] CookieSession - session manager missing")
 	}
+	sessHandle := appCore.SessionHandle()
 	mgr := sessSvc.CookieSessionManager
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !mgr.Serving() {
+		if _, ok := sessHandle.Get(); !ok || !mgr.Enabled() {
 			responses.WriteErrorJSON(w, http.StatusServiceUnavailable, errs.SessionServiceUnavailable.WithDetail("cookie session"))
 			return
 		}

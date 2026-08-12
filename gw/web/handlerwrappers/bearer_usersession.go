@@ -38,6 +38,7 @@ func (m *BearerUserSession[UID]) Wrap(inner http.Handler) http.Handler {
 	if sessSvc == nil || sessSvc.BearerSessionManager == nil {
 		log.Fatal("[ERROR] BearerUserSession - session manager missing")
 	}
+	sessHandle := appCore.SessionHandle()
 	mgr := sessSvc.BearerSessionManager
 
 	// Boot-time: build allowed-groups lookup map once, captured in closure.
@@ -55,7 +56,9 @@ func (m *BearerUserSession[UID]) Wrap(inner http.Handler) http.Handler {
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !sessSvc.Serving(mgr) {
+		// Lifecycle from the framework handle; the protocol switch stays the
+		// manager's.
+		if _, ok := sessHandle.Get(); !ok || !mgr.Enabled() {
 			responses.WriteErrorJSON(w, http.StatusServiceUnavailable, errs.SessionServiceUnavailable.WithDetail("bearer user session"))
 			return
 		}

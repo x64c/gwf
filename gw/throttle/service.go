@@ -179,25 +179,34 @@ func (s *Service) GetBucket(groupID string, bucketID string) (*Bucket, bool) {
 	return g.GetBucket(bucketID)
 }
 
-// SetBucketGroup registers a bucket group by id. Must be called BEFORE Start;
-// the groups map is plain (no mutex) and is only safe under the contract that
-// all writes happen during startup, then only reads occur (request handlers +
-// cleanup ticker) — which is race-free for a Go map. Calling this after Start
-// would violate that contract and cause data races, so it fails loud here.
-func (s *Service) SetBucketGroup(id string, conf *BucketConf) {
-	if s.state.Load() == svc.StateRUNNING {
-		log.Fatalf("[ERROR][%s] Can't set a bucket group(%q). Service already running.", s.Name(), id)
+// SetBucketGroup registers a bucket group by id. Groups are BOOT WIRING: the
+// groups map is plain (no mutex) and is only race-free under the contract that
+// all writes happen before Start, then only reads occur (request handlers +
+// cleanup ticker). A call in any state but READY is refused with an error —
+// refusal, not a process kill: the sequencing mistake is the caller's, and a
+// boot-time caller keeps fail-fast at its own call site by treating the error
+// as fatal there.
+func (s *Service) SetBucketGroup(id string, conf *BucketConf) error {
+	if state := s.state.Load(); state != svc.StateREADY {
+		return fmt.Errorf("throttle %q: can't set bucket group %q: state is %v — groups are boot wiring, set before Start", s.Name(), id, state)
 	}
 	s.groups[id] = &BucketGroup{
 		conf:    conf,
 		buckets: &bucketMap{},
 	}
+	return nil
 }
 
+// Allow reports the bucket's verdict for one use of bucketID within groupID.
+// An unknown groupID is always blocked.
+//
+// Allow answers the RATE question only. Whether this service may be used right
+// now is not its to answer — reachability is decided in front of the pointer,
+// by the framework (svc.Service; consumers reach the service through a
+// framework handle). The buckets are passive state, so they survive Stop and
+// keep computing honest verdicts; a bool cannot express "unavailable", which
+// is exactly why no lifecycle answer may be folded into this one.
 func (s *Service) Allow(groupID string, bucketID string, now time.Time) bool {
-	if s.state.Load() != svc.StateRUNNING {
-		return true // not running → not throttling
-	}
 	g, ok := s.GetBucketGroup(groupID)
 	if !ok {
 		return false // Invalid groupID -> always Blocked

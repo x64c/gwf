@@ -57,8 +57,10 @@ func (c *Core) PrepareWebService(addr string, httpHandler http.Handler) error {
 	if c.SessionService != nil {
 		deps = append(deps, MayUse(c.SessionService.Name()))
 	}
-	if _, err = c.RegisterService(c.WebService, deps...); err != nil {
+	node, err := c.RegisterService(c.WebService, deps...)
+	if err != nil {
 		return err
 	}
+	c.webNode = node
 	return nil
 }

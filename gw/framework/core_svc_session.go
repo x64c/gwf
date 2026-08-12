@@ -17,8 +17,10 @@ func (c *Core) PrepareSessionService(cleanupCycle time.Duration, cleanupOlderTha
 	// No dependency to declare: the KVDB it is built with is an infrastructure
 	// client, not a service, so nothing in the graph has to outlive it or
 	// precede it on that account.
-	if _, err := c.RegisterService(c.SessionService); err != nil {
+	node, err := c.RegisterService(c.SessionService)
+	if err != nil {
 		return err
 	}
+	c.sessionNode = node
 	return nil
 }

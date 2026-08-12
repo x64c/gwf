@@ -2,7 +2,6 @@ package responses
 
 import (
 	"encoding/json/v2"
-	"fmt"
 	"log"
 	"net/http"
 
@@ -34,14 +33,6 @@ func WriteSimpleErrorJSON(w http.ResponseWriter, httpStatusCode int, msg string)
 
 func WriteErrorJSON(w http.ResponseWriter, httpStatusCode int, resErr *errs.Error) {
 	EncodeWriteJSON(w, httpStatusCode, resErr)
-}
-
-func WriteAnyDataOrErrorJSON(w http.ResponseWriter, resData any, httpStatusCode int, err error) {
-	if err != nil {
-		WriteSimpleErrorJSON(w, httpStatusCode, fmt.Sprintf("%v", err))
-		return
-	}
-	EncodeWriteJSON(w, httpStatusCode, resData)
 }
 
 // ToDo: Stream

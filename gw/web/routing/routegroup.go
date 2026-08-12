@@ -94,10 +94,18 @@ func (g *RouteGroup) HandleFunc(subpattern string, handleFunc func(http.Response
 //	  }
 //	}
 func (g *RouteGroup) Group(subPrefix string, batch func(*RouteGroup), handlerWrappers ...web.HandlerWrapper) *RouteGroup {
+	// The subgroup OWNS its wrapper list — a fresh array, never a view into the
+	// parent's. Appending onto the parent's slice let two sibling subgroups
+	// write the same backing-array slot, so a route registered on a retained
+	// subgroup after a sibling existed got the sibling's wrapper.
+	wrappers := make([]web.HandlerWrapper, 0, len(g.HandlerWrappers)+len(handlerWrappers))
+	wrappers = append(wrappers, g.HandlerWrappers...)
+	wrappers = append(wrappers, handlerWrappers...)
+
 	subg := &RouteGroup{
-		Router:          g.Router,                                      // same router
-		Prefix:          g.Prefix + subPrefix,                          // extended prefix
-		HandlerWrappers: append(g.HandlerWrappers, handlerWrappers...), // handlerwrappers appended
+		Router:          g.Router,             // same router
+		Prefix:          g.Prefix + subPrefix, // extended prefix
+		HandlerWrappers: wrappers,
 	}
 
 	batch(subg)

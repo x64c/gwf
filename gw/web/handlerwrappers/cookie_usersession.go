@@ -33,6 +33,7 @@ func (m *CookieUserSession[UID]) Wrap(inner http.Handler) http.Handler {
 	if sessSvc == nil || sessSvc.CookieSessionManager == nil {
 		log.Fatal("[ERROR] CookieUserSession - session manager missing")
 	}
+	sessHandle := appCore.SessionHandle()
 	mgr := sessSvc.CookieSessionManager
 
 	var authHandler http.Handler
@@ -47,10 +48,12 @@ func (m *CookieUserSession[UID]) Wrap(inner http.Handler) http.Handler {
 		return nil
 	}
 
-	// Gate: reject when the cookie protocol isn't serving (service stopped or
-	// cookie disabled). Additive protocol → can't attach identity → 503.
+	// Gate: reject when the cookie protocol isn't serving. Lifecycle comes from
+	// the framework handle (un-admitted = stopped, terminating, or never
+	// wired); the protocol's own on/off switch stays the manager's. Additive
+	// protocol → can't attach identity → 503.
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !sessSvc.Serving(mgr) {
+		if _, ok := sessHandle.Get(); !ok || !mgr.Enabled() {
 			responses.WriteErrorJSON(w, http.StatusServiceUnavailable, errs.SessionServiceUnavailable.WithDetail("cookie user session"))
 			return
 		}

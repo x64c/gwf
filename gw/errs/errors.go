@@ -14,6 +14,7 @@ var (
 	ContentLengthTooLarge = &Error{Name: "ContentLengthTooLarge", Code: 1000, Message: "Content-Length header is too large"} // declared body would exceed limit — caught upfront from the Content-Length header
 	RequestBodyTooLarge   = &Error{Name: "RequestBodyTooLarge", Code: 1001, Message: "request body too large"}               // actual body bytes exceeded limit during streaming read
 	OriginNotAllowed      = &Error{Name: "OriginNotAllowed", Code: 1010, Message: "request origin not allowed"}              // Origin header missing, or not in the configured allowlist
+	ServiceUnavailable    = &Error{Name: "ServiceUnavailable", Code: 1020, Message: "service unavailable"}                   // a service the endpoint needs is not admitted for use right now (stopped, terminating, or never wired)
 
 	// Session
 

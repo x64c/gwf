@@ -57,6 +57,15 @@ type Core struct {
 	shutdownDone chan struct{} // closed once the shutdown walk has finished; what WaitServicesTerminated blocks on
 	shutdownErr  error         // first error the walk recorded, including an abandoned service
 	shutdownOnce sync.Once     // the walk publishes its result exactly once
+
+	// Core's own services' nodes, retained at their Prepare* so the *Handle
+	// accessors (core_handles.go) can mint gated references. nil = the app
+	// never prepared that service.
+	udsNode          *ServiceNode
+	jobSchedulerNode *ServiceNode
+	webNode          *ServiceNode
+	sessionNode      *ServiceNode
+	throttleNode     *ServiceNode
 }
 
 // RegisterService registers a service with Core and returns its node — the
@@ -168,6 +177,36 @@ func (c *Core) rollbackStarted(started []*ServiceNode, failed *ServiceNode, caus
 		}
 	}
 	log.Printf("[INFO] boot rollback complete — no service left running")
+}
+
+// StartServiceNode starts one service on operator action and admits it on
+// success — the same pairing StartServices applies at boot. The runtime
+// lineage is Core's RootCtx, as at boot, so app shutdown still cancels a
+// service an operator resumed.
+func (c *Core) StartServiceNode(n *ServiceNode) error {
+	if n == nil || n.svc == nil {
+		return fmt.Errorf("start: no service behind this node")
+	}
+	if err := n.svc.Start(c.RootCtx); err != nil {
+		return err
+	}
+	n.admitted.Store(true)
+	return nil
+}
+
+// StopServiceNode pauses one service on operator action. Admission is revoked
+// FIRST — the same ordering terminateNode uses — so no new use begins while
+// the service is stopping. Stop is a pause (svc.Service): the passive state
+// survives and every method stays callable, so the handle in front is the only
+// thing telling new callers "unavailable". A stopped service stays un-admitted
+// until an operator starts it again — including when Stop itself returns an
+// error, since a service that failed to stop cleanly is not one to readmit.
+func (c *Core) StopServiceNode(ctx context.Context, n *ServiceNode) error {
+	if n == nil || n.svc == nil {
+		return fmt.Errorf("stop: no service behind this node")
+	}
+	n.admitted.Store(false)
+	return n.svc.Stop(ctx)
 }
 
 // WaitServicesTerminated blocks until the shutdown walk has finished, and

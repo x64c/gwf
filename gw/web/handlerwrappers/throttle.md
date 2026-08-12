@@ -1,12 +1,25 @@
-# IP Throttle Middleware
+# Throttle Middleware
 
-Keys a throttle bucket by the caller's resolved address: `ThrottleIP{AppProvider,
-BucketGroupID}` calls `ClientIPResolver.ClientIP(r)`, then
-`ThrottleService.Allow(BucketGroupID, ip, now)`. On refusal it answers HTTP 429
-and does not call the inner handler; the response message currently includes the
-resolved address.
+`Throttle{AppProvider, BucketGroupID, KeyProvider}` limits requests by a
+caller-defined string key. Per request it reaches the throttle service through
+its framework handle, extracts the key with `KeyProvider`, and asks
+`Allow(BucketGroupID, key, now)`. On refusal it answers HTTP 429 with the
+structured `RateLimited` error and does not call the inner handler.
 
-The resolved address depends on the deployment's trusted-proxy declaration
+The service is reached through its handle, so an un-admitted throttle service —
+stopped by an operator, mid-teardown, or never wired — answers HTTP 503
+`ServiceUnavailable`: a limiter that cannot compute a verdict does not pass
+traffic. An endpoint carrying this middleware is reached through the throttling
+service strictly; there is no bypass state.
+
+## Key providers
+
+`KeyProvider` decides what the limit counts: a session UID, a session id, an
+address, a composite. A provider returning `ok=false` blocks the request —
+failure to identify the bucket is never a pass.
+
+`IPThrottleKey(appProvider)` is the shipped address-keyed provider: it resolves
+the caller's address per the deployment's trusted-proxy declaration
 (`trusted_proxy_cidrs`). With no declaration, every request arriving through a
 proxy resolves to the proxy's address and shares one bucket.
 
@@ -25,7 +38,7 @@ per-address limit can be relied on for.
   through many source addresses, so per-address counters do not accumulate
   against it.
 
-## Consequence for how to use it
+## Consequence for how to use address keying
 
 Per-address throttling is a volumetric control — it bounds traffic from one
 network path. It is not an identity control: it cannot bound attempts against a

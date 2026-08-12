@@ -24,8 +24,10 @@ func (c *Core) PrepareUDSService(cmdStore *uds.CommandStore) error {
 	// there would order it as a dependent of everything it inspects, so it
 	// would start last and terminate first — losing the observer exactly when a
 	// hanging boot or a slow drain is the thing worth watching.
-	if _, err = c.RegisterService(c.UDSService); err != nil {
+	node, err := c.RegisterService(c.UDSService)
+	if err != nil {
 		return err
 	}
+	c.udsNode = node
 	return nil
 }

@@ -18,6 +18,10 @@ func (c *Core) PrepareThrottleService(cleanupCycle time.Duration, cleanupOlderTh
 	// Depends on nothing: a token-bucket engine over string keys, with no
 	// service of its own to call. What depends on IT is declared by the
 	// dependents.
-	_, err := c.RegisterService(c.ThrottleService)
-	return err
+	node, err := c.RegisterService(c.ThrottleService)
+	if err != nil {
+		return err
+	}
+	c.throttleNode = node
+	return nil
 }

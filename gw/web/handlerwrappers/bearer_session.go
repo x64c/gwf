@@ -11,8 +11,10 @@ import (
 
 // BearerSession gates an endpoint on the bearer session protocol being in
 // service. It rejects with 503 SessionServiceUnavailable when the protocol
-// isn't serving — the session service is stopped, or the bearer protocol is
-// disabled — and otherwise passes the request through unchanged.
+// isn't serving — the session service is not admitted for use (its framework
+// handle answers the lifecycle question), or the bearer protocol is disabled
+// (the manager's own switch) — and otherwise passes the request through
+// unchanged.
 //
 // It produces no SessionData. BearerUserSession is this gate plus user-identity
 // resolution; use BearerSession on routes that depend on the bearer subsystem
@@ -23,13 +25,15 @@ type BearerSession struct {
 }
 
 func (m *BearerSession) Wrap(inner http.Handler) http.Handler {
-	sessSvc := m.AppProvider().AppCore().SessionService
+	appCore := m.AppProvider().AppCore()
+	sessSvc := appCore.SessionService
 	if sessSvc == nil || sessSvc.BearerSessionManager == nil {
 		log.Fatal("[ERROR] BearerSession - session manager missing")
 	}
+	sessHandle := appCore.SessionHandle()
 	mgr := sessSvc.BearerSessionManager
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !mgr.Serving() {
+		if _, ok := sessHandle.Get(); !ok || !mgr.Enabled() {
 			responses.WriteErrorJSON(w, http.StatusServiceUnavailable, errs.SessionServiceUnavailable.WithDetail("bearer session"))
 			return
 		}

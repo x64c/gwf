@@ -26,9 +26,11 @@ func (r *BaseRouter) HandleFunc(pattern string, handleFunc func(http.ResponseWri
 
 func (r *BaseRouter) Group(prefix string, batch func(*RouteGroup), handlerWrappers ...web.HandlerWrapper) *RouteGroup {
 	g := &RouteGroup{
-		Router:          r,
-		Prefix:          prefix,
-		HandlerWrappers: handlerWrappers,
+		Router: r,
+		Prefix: prefix,
+		// The group owns its wrapper list (see RouteGroup.Group) — a caller
+		// spreading a shared slice must not alias it into the group.
+		HandlerWrappers: append(make([]web.HandlerWrapper, 0, len(handlerWrappers)), handlerWrappers...),
 	}
 
 	batch(g)

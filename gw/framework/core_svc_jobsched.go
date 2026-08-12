@@ -14,6 +14,10 @@ func (c *Core) PrepareJobSchedulerService() error {
 	// Depends on nothing at this level. Individual jobs may reach for whatever
 	// the app hands them, but a job's needs are the job's to declare, not the
 	// scheduler's — the scheduler only runs what it is given.
-	_, err := c.RegisterService(c.JobSchedulerService)
-	return err
+	node, err := c.RegisterService(c.JobSchedulerService)
+	if err != nil {
+		return err
+	}
+	c.jobSchedulerNode = node
+	return nil
 }

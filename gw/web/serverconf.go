@@ -25,6 +25,7 @@ type ServerConf struct {
 	WriteTimeoutSecs      int `json:"write_timeout_secs"`       // REQUIRED (> 0). Deadline from end-of-header-read to the last response byte, so it bounds HANDLER time too. Must exceed the slowest legitimate response (report/PDF generation, long polls, streamed output).
 	IdleTimeoutSecs       int `json:"idle_timeout_secs"`        // REQUIRED (> 0). How long an idle keep-alive connection is kept open between requests. Shorter reclaims sockets from idle peers sooner; longer avoids a connection-pooling peer (browser, SDK, proxy upstream) racing to reuse a connection this server just closed.
 	DrainTimeoutSecs      int `json:"drain_timeout_secs"`       // REQUIRED (> 0, < core terminate_timeout_secs). Graceful-drain window for Server.Shutdown on stop — the grace period in-flight requests get to finish. A request may outlive it (write_timeout is the longer bound); when it closes, request contexts are canceled so handlers can unwind instead of being hard-killed.
+	MaxHeaderBytes        int `json:"max_header_bytes"`         // REQUIRED (> 0). Upper bound on the request line plus all headers, per request (net/http enforces it with a small internal read slack, ~4 KiB). Unset, Go silently applies its own 1 MiB — a limit nobody chose and no conf states; the deployment states its number here (Go's 1048576 is a reasonable one).
 
 	// TrustedProxyCIDRs lists the proxies allowed to state who the caller is.
 	// Optional; absent or empty means trust nothing, and the client address is
@@ -54,6 +55,9 @@ func (c ServerConf) Validate() error {
 	}
 	if c.DrainTimeoutSecs <= 0 {
 		return fmt.Errorf("drain_timeout_secs must be set (seconds > 0) in .web-server.json: got %d", c.DrainTimeoutSecs)
+	}
+	if c.MaxHeaderBytes <= 0 {
+		return fmt.Errorf("max_header_bytes must be set (bytes > 0) in .web-server.json: got %d — unset, Go would silently apply its own 1 MiB", c.MaxHeaderBytes)
 	}
 	if c.ReadHeaderTimeoutSecs > c.ReadTimeoutSecs {
 		return fmt.Errorf("read_header_timeout_secs (%d) must not exceed read_timeout_secs (%d): the whole-request deadline would fire first, leaving the header deadline dead", c.ReadHeaderTimeoutSecs, c.ReadTimeoutSecs)
@@ -85,6 +89,7 @@ func (c ServerConf) newHTTPServer(addr string, handler http.Handler, baseCtx con
 		ReadTimeout:       secs(c.ReadTimeoutSecs),
 		WriteTimeout:      secs(c.WriteTimeoutSecs),
 		IdleTimeout:       secs(c.IdleTimeoutSecs),
+		MaxHeaderBytes:    c.MaxHeaderBytes,
 	}
 }
 

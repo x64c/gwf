@@ -73,21 +73,6 @@ func NewServiceAs(name string, kvdb kvdbs.DB, cleanupCycle time.Duration, cleanu
 	return s
 }
 
-// Serving reports whether a protocol should serve a request right now: the
-// service is RUNNING and the protocol is enabled. The composition lives here
-// because only the service sees both the lifecycle state and the protocol's
-// switch; the protocol itself only knows its own Enabled().
-//
-// protocolMgr is the protocol's manager (a svc.Switchable). A nil protocolMgr
-// — e.g. an unwired manager passed directly — reports false (not serving), so
-// the caller can pass its manager field without a separate nil check.
-func (s *Service) Serving(protocolMgr svc.Switchable) bool {
-	if protocolMgr == nil {
-		return false
-	}
-	return s.state.Load() == svc.StateRUNNING && protocolMgr.Enabled()
-}
-
 // Start : READY → RUNNING. parentCtx is the runtime cancellation lineage.
 // Lifecycle methods (Start/Stop/Terminate) are not safe to call concurrently.
 func (s *Service) Start(parentCtx context.Context) error {
