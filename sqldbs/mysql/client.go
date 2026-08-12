@@ -75,8 +75,16 @@ func (c *Client) CreateDB(name string, rawConf jsontext.Value) error {
 		return fmt.Errorf("mysql db %q ping: %w", name, err)
 	}
 
+	// Construction includes the schema snapshot: a DB is never handed out
+	// without one, which is what lets CachedSchema promise non-nil.
+	db := &DB{conn: conn, client: c}
+	if _, err := db.RefreshSchema(ctx); err != nil {
+		_ = conn.Close()
+		return fmt.Errorf("mysql db %q schema: %w", name, err)
+	}
+
 	log.Printf("[INFO] mysql db %q initialized (%s)", name, dbConf.DB)
-	c.dbs[name] = &DB{conn: conn, client: c}
+	c.dbs[name] = db
 	return nil
 }
 
@@ -138,8 +146,16 @@ func (c *Client) InPlaceholders(_, cnt int) string {
 // by doubling it. Without that, a name containing a backtick closes the quoting
 // early and everything after it is parsed as SQL — identifiers reach here from
 // caller-supplied column lists, so this is an injection boundary, not cosmetics.
+//
+// A dot separates parts of a qualified name, so each part is quoted on its own:
+// user.email becomes `user`.`email`, not `user.email`, which would name a single
+// column with a dot in it.
 func (c *Client) QuoteIdentifier(name string) string {
-	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
+	parts := strings.Split(name, ".")
+	for i, part := range parts {
+		parts[i] = "`" + strings.ReplaceAll(part, "`", "``") + "`"
+	}
+	return strings.Join(parts, ".")
 }
 
 // PrepareClients loads MySQL client configs from .sqldb-clients-mysql.json

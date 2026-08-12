@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	lowimpl "github.com/redis/go-redis/v9"
+	"github.com/x64c/gwf/gw/clock"
 	"github.com/x64c/gwf/gw/kvdbs"
 )
 
@@ -52,7 +53,10 @@ func (c *Client) CreateDB(name string, rawConf jsontext.Value) error {
 		DB:       dbConf.DB,
 	})
 	log.Printf("[INFO] redis db %q initialized (db %d)", name, dbConf.DB)
-	c.dbs[name] = &DB{internal: internal}
+	c.dbs[name] = &DB{
+		internal: internal,
+		clock:    clock.New(TimePrecision),
+	}
 	return nil
 }
 

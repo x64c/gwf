@@ -41,7 +41,7 @@ func (h *KvdbGet) HandleCommand(args []string, w io.Writer) error {
 	}
 	switch typeName {
 	case "string":
-		strVal, found, err := appCore.MainKVDB.Get(ctx, key)
+		strVal, found, err := appCore.MainKVDB.ValueGet(ctx, key)
 		if err != nil {
 			return err
 		}
@@ -50,7 +50,7 @@ func (h *KvdbGet) HandleCommand(args []string, w io.Writer) error {
 		}
 		_, _ = fmt.Fprintln(w, strVal)
 	case "list":
-		vals, err := appCore.MainKVDB.Range(ctx, key, 0, -1)
+		vals, err := appCore.MainKVDB.ListRange(ctx, key, 0, -1)
 		if err != nil {
 			return err
 		}
@@ -58,7 +58,7 @@ func (h *KvdbGet) HandleCommand(args []string, w io.Writer) error {
 			_, _ = fmt.Fprintln(w, v)
 		}
 	case "hash":
-		valMap, err := appCore.MainKVDB.GetAllFields(ctx, key)
+		valMap, err := appCore.MainKVDB.HashGetAll(ctx, key)
 		if err != nil {
 			return err
 		}

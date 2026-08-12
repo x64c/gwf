@@ -22,12 +22,12 @@ func (p *PreparedStmt) Query(ctx context.Context, args ...any) (sqldbs.Rows, err
 	return &Rows{rows: rows}, nil
 }
 
-func (p *PreparedStmt) Exec(ctx context.Context, args ...any) (sqldbs.Result, error) {
+func (p *PreparedStmt) Exec(ctx context.Context, args ...any) (int64, error) {
 	result, err := p.stmt.ExecContext(ctx, args...)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	return &Result{result: result}, nil
+	return result.RowsAffected()
 }
 
 func (p *PreparedStmt) Close() error {

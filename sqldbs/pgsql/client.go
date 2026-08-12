@@ -76,8 +76,16 @@ func (c *Client) CreateDB(name string, rawConf jsontext.Value) error {
 		return fmt.Errorf("pgsql db %q ping: %w", name, err)
 	}
 
+	// Construction includes the schema snapshot: a DB is never handed out
+	// without one, which is what lets CachedSchema promise non-nil.
+	db := &DB{pool: pool, client: c}
+	if _, err := db.RefreshSchema(ctx); err != nil {
+		pool.Close()
+		return fmt.Errorf("pgsql db %q schema: %w", name, err)
+	}
+
 	log.Printf("[INFO] pgsql db %q initialized (%s)", name, dbConf.DB)
-	c.dbs[name] = &DB{pool: pool, client: c}
+	c.dbs[name] = db
 	return nil
 }
 
@@ -137,8 +145,16 @@ func (c *Client) InPlaceholders(start, cnt int) string {
 // quoting early and everything after it is parsed as SQL — identifiers reach
 // here from caller-supplied column lists, so this is an injection boundary,
 // not cosmetics.
+//
+// A dot separates parts of a qualified name, so each part is quoted on its own:
+// user.email becomes "user"."email", not "user.email", which would name a single
+// column with a dot in it.
 func (c *Client) QuoteIdentifier(name string) string {
-	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+	parts := strings.Split(name, ".")
+	for i, part := range parts {
+		parts[i] = `"` + strings.ReplaceAll(part, `"`, `""`) + `"`
+	}
+	return strings.Join(parts, ".")
 }
 
 // PrepareClients loads PostgreSQL client configs from .sqldb-clients-pgsql.json

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"sync/atomic"
 
 	"github.com/x64c/gwf/gw/sqldbs"
 )
@@ -16,20 +17,21 @@ type DB struct {
 	conn      *sql.DB
 	client    *Client
 	mainStore *sqldbs.RawSQLStore
+	schema    atomic.Pointer[sqldbs.Schema] // held snapshot — see CachedSchema
 }
 
 // Core
 
-func (d *DB) Exec(ctx context.Context, query string, args ...any) (sqldbs.Result, error) {
-	result, err := d.conn.ExecContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	return &Result{result: result}, nil
-}
-
 func (d *DB) Client() sqldbs.Client {
 	return d.client
+}
+
+func (d *DB) Exec(ctx context.Context, query string, args ...any) (int64, error) {
+	result, err := d.conn.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 // Query — any row-returning statement, no verb guard.
@@ -46,21 +48,70 @@ func (d *DB) QueryRowsRaw(ctx context.Context, query string, args ...any) (sqldb
 	return &Rows{rows: rows}, nil
 }
 
-// Select
+// Verb-guarded — still caller-written SQL, with a first-word check added.
 
-func (d *DB) SelectRow(ctx context.Context, table string, pkColumn string, id any, columns []string) (sqldbs.Row, error) {
-	if len(columns) == 0 {
-		return nil, fmt.Errorf("SelectRow: no columns")
+func (d *DB) SelectRowRaw(ctx context.Context, query string, args ...any) (sqldbs.Row, error) {
+	trimmed := strings.TrimSpace(query)
+	if !strings.HasPrefix(strings.ToUpper(trimmed), "SELECT") {
+		return nil, fmt.Errorf("SelectRowRaw: query must start with SELECT")
 	}
-	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s = ? LIMIT 1", sqldbs.QuoteJoinIdentifiers(d.client, columns), d.client.QuoteIdentifier(table), d.client.QuoteIdentifier(pkColumn))
-	return &Row{row: d.conn.QueryRowContext(ctx, query, id)}, nil
+	return d.QueryRowRaw(ctx, query, args...), nil
 }
 
-func (d *DB) SelectRows(ctx context.Context, table string, columns []string, where sqldbs.Cond) (sqldbs.Rows, error) {
-	if len(columns) == 0 {
-		return nil, fmt.Errorf("SelectRows: no columns")
+func (d *DB) SelectRowsRaw(ctx context.Context, query string, args ...any) (sqldbs.Rows, error) {
+	trimmed := strings.TrimSpace(query)
+	if !strings.HasPrefix(strings.ToUpper(trimmed), "SELECT") {
+		return nil, fmt.Errorf("SelectRowsRaw: query must start with SELECT")
 	}
-	query := fmt.Sprintf("SELECT %s FROM %s", sqldbs.QuoteJoinIdentifiers(d.client, columns), d.client.QuoteIdentifier(table))
+	return d.QueryRowsRaw(ctx, query, args...)
+}
+
+func (d *DB) InsertRowsRaw(ctx context.Context, query string, args ...any) (int64, error) {
+	trimmed := strings.TrimSpace(query)
+	if !strings.HasPrefix(strings.ToUpper(trimmed), "INSERT") {
+		return 0, fmt.Errorf("InsertRowsRaw: query must start with INSERT")
+	}
+	return d.Exec(ctx, query, args...)
+}
+
+func (d *DB) UpdateRowsRaw(ctx context.Context, query string, args ...any) (int64, error) {
+	trimmed := strings.TrimSpace(query)
+	if !strings.HasPrefix(strings.ToUpper(trimmed), "UPDATE") {
+		return 0, fmt.Errorf("UpdateRowsRaw: query must start with UPDATE")
+	}
+	return d.Exec(ctx, query, args...)
+}
+
+func (d *DB) DeleteRowsRaw(ctx context.Context, query string, args ...any) (int64, error) {
+	trimmed := strings.TrimSpace(query)
+	if !strings.HasPrefix(strings.ToUpper(trimmed), "DELETE") {
+		return 0, fmt.Errorf("DeleteRowsRaw: query must start with DELETE")
+	}
+	return d.Exec(ctx, query, args...)
+}
+
+// Built — statement builders over a Table.
+
+// Select
+
+func (d *DB) SelectRow(ctx context.Context, table *sqldbs.Table, pkValue sqldbs.PK, colNames ...string) (sqldbs.Row, error) {
+	cols, err := table.Columns().Choose(colNames...)
+	if err != nil {
+		return nil, fmt.Errorf("SelectRow: %w", err)
+	}
+	if err := table.ValidatePK(pkValue); err != nil {
+		return nil, fmt.Errorf("SelectRow: %w", err)
+	}
+	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s LIMIT 1", sqldbs.QuoteJoinIdentifiers(d.client, cols.Names()), d.client.QuoteIdentifier(table.Name()), wherePK(d.client, table))
+	return d.QueryRowRaw(ctx, query, pkValue...), nil
+}
+
+func (d *DB) SelectRows(ctx context.Context, table *sqldbs.Table, where sqldbs.Cond, colNames ...string) (sqldbs.Rows, error) {
+	cols, err := table.Columns().Choose(colNames...)
+	if err != nil {
+		return nil, fmt.Errorf("SelectRows: %w", err)
+	}
+	query := fmt.Sprintf("SELECT %s FROM %s", sqldbs.QuoteJoinIdentifiers(d.client, cols.Names()), d.client.QuoteIdentifier(table.Name()))
 	var args []any
 	if where != nil {
 		whereRaw, whereArgs := where.BindRepr()
@@ -69,51 +120,41 @@ func (d *DB) SelectRows(ctx context.Context, table string, columns []string, whe
 			args = whereArgs
 		}
 	}
-	rows, err := d.conn.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	return &Rows{rows: rows}, nil
-}
-
-func (d *DB) SelectRowRaw(ctx context.Context, query string, args ...any) (sqldbs.Row, error) {
-	trimmed := strings.TrimSpace(query)
-	if !strings.HasPrefix(strings.ToUpper(trimmed), "SELECT") {
-		return nil, fmt.Errorf("SelectRowRaw: query must start with SELECT")
-	}
-	return &Row{row: d.conn.QueryRowContext(ctx, query, args...)}, nil
-}
-
-func (d *DB) SelectRowsRaw(ctx context.Context, query string, args ...any) (sqldbs.Rows, error) {
-	trimmed := strings.TrimSpace(query)
-	if !strings.HasPrefix(strings.ToUpper(trimmed), "SELECT") {
-		return nil, fmt.Errorf("SelectRowsRaw: query must start with SELECT")
-	}
-	rows, err := d.conn.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	return &Rows{rows: rows}, nil
+	return d.QueryRowsRaw(ctx, query, args...)
 }
 
 // Insert
 
-func (d *DB) InsertRow(ctx context.Context, table string, columns []string, values []any) (sqldbs.Result, error) {
+func (d *DB) InsertRow(ctx context.Context, table *sqldbs.Table, columns []string, values []any) error {
 	if len(columns) == 0 {
-		return nil, fmt.Errorf("InsertRow: no columns")
+		return fmt.Errorf("InsertRow: no columns")
+	}
+	if len(columns) != len(values) {
+		return fmt.Errorf("InsertRow: columns and values length mismatch")
+	}
+	if _, err := table.Columns().Choose(columns...); err != nil {
+		return fmt.Errorf("InsertRow: %w", err)
 	}
 	placeholders := strings.Repeat("?, ", len(columns)-1) + "?"
-	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", d.client.QuoteIdentifier(table), sqldbs.QuoteJoinIdentifiers(d.client, columns), placeholders)
-	result, err := d.conn.ExecContext(ctx, query, values...)
-	if err != nil {
-		return nil, err
-	}
-	return &Result{result: result}, nil
+	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", d.client.QuoteIdentifier(table.Name()), sqldbs.QuoteJoinIdentifiers(d.client, columns), placeholders)
+	_, err := d.Exec(ctx, query, values...)
+	return err
 }
 
-func (d *DB) InsertRows(ctx context.Context, table string, columns []string, rowValues [][]any) (int64, error) {
+// InsertRows builds one multi-row INSERT. MySQL's bulk-load path, LOAD DATA
+// INFILE, wants a file or a client-side stream and is commonly disabled on the
+// server, so a statement is the workable choice here.
+//
+// Being a statement, it has a ceiling: every value is a bind parameter and the
+// whole thing must fit the server's max_allowed_packet. A caller inserting a
+// large set should chunk it — the interface says the bound belongs to the
+// implementation, and this is that bound.
+func (d *DB) InsertRows(ctx context.Context, table *sqldbs.Table, columns []string, rowValues [][]any) (int64, error) {
 	if len(columns) == 0 {
 		return 0, fmt.Errorf("InsertRows: no columns")
+	}
+	if _, err := table.Columns().Choose(columns...); err != nil {
+		return 0, fmt.Errorf("InsertRows: %w", err)
 	}
 	if len(rowValues) == 0 {
 		return 0, nil
@@ -121,55 +162,68 @@ func (d *DB) InsertRows(ctx context.Context, table string, columns []string, row
 	colList := sqldbs.QuoteJoinIdentifiers(d.client, columns)
 	placeholders := "(" + strings.Repeat("?, ", len(columns)-1) + "?)"
 	allPlaceholders := strings.Repeat(placeholders+", ", len(rowValues)-1) + placeholders
-	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES %s", d.client.QuoteIdentifier(table), colList, allPlaceholders)
+	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES %s", d.client.QuoteIdentifier(table.Name()), colList, allPlaceholders)
 	var args []any
 	for _, row := range rowValues {
 		args = append(args, row...)
 	}
-	result, err := d.conn.ExecContext(ctx, query, args...)
+	return d.Exec(ctx, query, args...)
+}
+
+func (d *DB) InsertRowAutoIncrementingPK(ctx context.Context, table *sqldbs.Table, columns []string, values []any) (int64, error) {
+	query, err := buildInsertAutoIncrementingPK(d.client, table, columns)
 	if err != nil {
 		return 0, err
 	}
-	return result.RowsAffected()
-}
-
-func (d *DB) InsertRowsRaw(ctx context.Context, query string, args ...any) (sqldbs.Result, error) {
-	trimmed := strings.TrimSpace(query)
-	if !strings.HasPrefix(strings.ToUpper(trimmed), "INSERT") {
-		return nil, fmt.Errorf("InsertRowsRaw: query must start with INSERT")
-	}
-	result, err := d.conn.ExecContext(ctx, query, args...)
+	// Stays on the connection rather than funneling through Exec: the generated
+	// key comes off the driver result (LastInsertId), which Exec does not expose.
+	result, err := d.conn.ExecContext(ctx, query, values...)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	return &Result{result: result}, nil
+	return autoIncrementPK(result, table.Name())
 }
 
 // Update
 
-func (d *DB) UpdateRow(ctx context.Context, table string, pkColumn string, id any, columns []string, values []any) (sqldbs.Result, error) {
+func (d *DB) UpdateRow(ctx context.Context, table *sqldbs.Table, pkValue sqldbs.PK, columns []string, values []any) (int64, error) {
+	if len(columns) == 0 {
+		return 0, fmt.Errorf("UpdateRow: no columns")
+	}
+	if len(columns) != len(values) {
+		return 0, fmt.Errorf("UpdateRow: columns and values length mismatch")
+	}
+	if _, err := table.Columns().Choose(columns...); err != nil {
+		return 0, fmt.Errorf("UpdateRow: %w", err)
+	}
+	if err := table.ValidatePK(pkValue); err != nil {
+		return 0, fmt.Errorf("UpdateRow: %w", err)
+	}
 	setClauses := make([]string, len(columns))
 	for i, col := range columns {
 		setClauses[i] = d.client.QuoteIdentifier(col) + " = ?"
 	}
-	query := fmt.Sprintf("UPDATE %s SET %s WHERE %s = ?", d.client.QuoteIdentifier(table), strings.Join(setClauses, ", "), d.client.QuoteIdentifier(pkColumn))
-	args := append(values, id)
-	result, err := d.conn.ExecContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	return &Result{result: result}, nil
+	query := fmt.Sprintf("UPDATE %s SET %s WHERE %s", d.client.QuoteIdentifier(table.Name()), strings.Join(setClauses, ", "), wherePK(d.client, table))
+	// Built fresh rather than appended to: values belongs to the caller, and
+	// appending would write the key into their backing array when it has room.
+	args := make([]any, 0, len(values)+len(pkValue))
+	args = append(args, values...)
+	args = append(args, pkValue...)
+	return d.Exec(ctx, query, args...)
 }
 
-func (d *DB) UpdateRows(ctx context.Context, table string, columns []string, values []any, where sqldbs.Cond) (int64, error) {
+func (d *DB) UpdateRows(ctx context.Context, table *sqldbs.Table, columns []string, values []any, where sqldbs.Cond) (int64, error) {
 	if len(columns) == 0 || len(columns) != len(values) {
 		return 0, fmt.Errorf("UpdateRows: columns and values length mismatch")
 	}
+	if _, err := table.Columns().Choose(columns...); err != nil {
+		return 0, fmt.Errorf("UpdateRows: %w", err)
+	}
 	setClauses := make([]string, len(columns))
 	for i, col := range columns {
 		setClauses[i] = d.client.QuoteIdentifier(col) + " = ?"
 	}
-	query := fmt.Sprintf("UPDATE %s SET %s", d.client.QuoteIdentifier(table), strings.Join(setClauses, ", "))
+	query := fmt.Sprintf("UPDATE %s SET %s", d.client.QuoteIdentifier(table.Name()), strings.Join(setClauses, ", "))
 	args := make([]any, len(values))
 	copy(args, values)
 	if where != nil {
@@ -179,38 +233,21 @@ func (d *DB) UpdateRows(ctx context.Context, table string, columns []string, val
 			args = append(args, whereArgs...)
 		}
 	}
-	result, err := d.conn.ExecContext(ctx, query, args...)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-func (d *DB) UpdateRowsRaw(ctx context.Context, query string, args ...any) (sqldbs.Result, error) {
-	trimmed := strings.TrimSpace(query)
-	if !strings.HasPrefix(strings.ToUpper(trimmed), "UPDATE") {
-		return nil, fmt.Errorf("UpdateRowsRaw: query must start with UPDATE")
-	}
-	result, err := d.conn.ExecContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	return &Result{result: result}, nil
+	return d.Exec(ctx, query, args...)
 }
 
 // Delete
 
-func (d *DB) DeleteRow(ctx context.Context, table string, pkColumn string, id any) (sqldbs.Result, error) {
-	query := fmt.Sprintf("DELETE FROM %s WHERE %s = ?", d.client.QuoteIdentifier(table), d.client.QuoteIdentifier(pkColumn))
-	result, err := d.conn.ExecContext(ctx, query, id)
-	if err != nil {
-		return nil, err
+func (d *DB) DeleteRow(ctx context.Context, table *sqldbs.Table, pkValue sqldbs.PK) (int64, error) {
+	if err := table.ValidatePK(pkValue); err != nil {
+		return 0, fmt.Errorf("DeleteRow: %w", err)
 	}
-	return &Result{result: result}, nil
+	query := fmt.Sprintf("DELETE FROM %s WHERE %s", d.client.QuoteIdentifier(table.Name()), wherePK(d.client, table))
+	return d.Exec(ctx, query, pkValue...)
 }
 
-func (d *DB) DeleteRows(ctx context.Context, table string, where sqldbs.Cond) (int64, error) {
-	query := fmt.Sprintf("DELETE FROM %s", d.client.QuoteIdentifier(table))
+func (d *DB) DeleteRows(ctx context.Context, table *sqldbs.Table, where sqldbs.Cond) (int64, error) {
+	query := fmt.Sprintf("DELETE FROM %s", d.client.QuoteIdentifier(table.Name()))
 	var args []any
 	if where != nil {
 		whereRaw, whereArgs := where.BindRepr()
@@ -219,23 +256,7 @@ func (d *DB) DeleteRows(ctx context.Context, table string, where sqldbs.Cond) (i
 			args = whereArgs
 		}
 	}
-	result, err := d.conn.ExecContext(ctx, query, args...)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-func (d *DB) DeleteRowsRaw(ctx context.Context, query string, args ...any) (sqldbs.Result, error) {
-	trimmed := strings.TrimSpace(query)
-	if !strings.HasPrefix(strings.ToUpper(trimmed), "DELETE") {
-		return nil, fmt.Errorf("DeleteRowsRaw: query must start with DELETE")
-	}
-	result, err := d.conn.ExecContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	return &Result{result: result}, nil
+	return d.Exec(ctx, query, args...)
 }
 
 // DB-specific
@@ -266,7 +287,7 @@ func (d *DB) BeginTx(ctx context.Context) (sqldbs.Tx, error) {
 
 func (d *DB) PKColumnOf(ctx context.Context, table string) (string, bool, error) {
 	var colName, extra string
-	err := d.conn.QueryRowContext(ctx,
+	err := d.QueryRowRaw(ctx,
 		`SELECT c.COLUMN_NAME, c.EXTRA
 		FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
 		JOIN INFORMATION_SCHEMA.COLUMNS c
