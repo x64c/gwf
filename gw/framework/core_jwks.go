@@ -28,10 +28,10 @@ func (c *Core) activeKidKVKey() string {
 // ActiveKid reads the currently active JWKS key id (kid) from MainKVDB.
 // Returns (kid, found, err). found=false indicates the kid hasn't been set yet.
 func (c *Core) ActiveKid(ctx context.Context) (string, bool, error) {
-	return c.MainKVDB.Get(ctx, c.activeKidKVKey())
+	return c.MainKVDB.ValueGet(ctx, c.activeKidKVKey())
 }
 
 // SetActiveKid stores kid in MainKVDB as the active JWKS key id, with no TTL.
 func (c *Core) SetActiveKid(ctx context.Context, kid string) error {
-	return c.MainKVDB.Set(ctx, c.activeKidKVKey(), kid, 0)
+	return c.MainKVDB.ValueSetPersistent(ctx, c.activeKidKVKey(), kid)
 }

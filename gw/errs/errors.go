@@ -30,6 +30,7 @@ var (
 	BearerSessionShapeMismatch   = &Error{Name: "BearerSessionShapeMismatch", Code: 1114, Message: "bearer session shape mismatch"}      // session's binds shape doesn't fit endpoint (e.g. userless on user-bound endpoint)
 	BearerSessionGroupNotAllowed = &Error{Name: "BearerSessionGroupNotAllowed", Code: 1115, Message: "bearer session group not allowed"} // session's group isn't in the endpoint's allowlist
 	BearerClientNotFound         = &Error{Name: "BearerClientNotFound", Code: 1116, Message: "bearer client not found"}                  // Client-Id missing in request OR unknown to the bearer client registry
+	BearerSessionNotFound        = &Error{Name: "BearerSessionNotFound", Code: 1117, Message: "bearer session not found"}                // the session row a token resolves to is gone; counterpart of CookieSessionNotFound
 
 	// ---- Cookie Session
 

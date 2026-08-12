@@ -45,17 +45,22 @@ func NewXChaCha20Poly1305CipherBase64(key []byte) (*XChaCha20Poly1305Cipher, err
 	)
 }
 
-func (c *XChaCha20Poly1305Cipher) EncryptEncode(plaintext []byte) (string, error) {
+// SealEncode encrypts plaintext with aad as associated data — authenticated,
+// not encrypted, not stored; DecodeOpen must receive the same bytes or fail.
+func (c *XChaCha20Poly1305Cipher) SealEncode(plaintext, aad []byte) (string, error) {
 	// Generate a random nonce every time, and leave capacity for the ciphertext
 	nonce := make([]byte, c.aead.NonceSize(), c.aead.NonceSize()+len(plaintext)+c.aead.Overhead())
 	if _, err := rand.Read(nonce); err != nil {
 		return "", err
 	}
-	ciphertext := c.aead.Seal(nonce, nonce, plaintext, nil)
+	ciphertext := c.aead.Seal(nonce, nonce, plaintext, aad)
 	return c.encodeFunc(ciphertext), nil
 }
 
-func (c *XChaCha20Poly1305Cipher) DecodeDecrypt(encodedCiphertext string) ([]byte, error) {
+// DecodeOpen decrypts a SealEncode output, authenticating both the ciphertext
+// and aad. Failure does not say which of key, aad, or ciphertext was wrong —
+// AEAD cannot distinguish them; a layer that knows the key id must add it.
+func (c *XChaCha20Poly1305Cipher) DecodeOpen(encodedCiphertext string, aad []byte) ([]byte, error) {
 	// Decode
 	data, err := c.decodeFunc(encodedCiphertext)
 	if err != nil {
@@ -68,5 +73,5 @@ func (c *XChaCha20Poly1305Cipher) DecodeDecrypt(encodedCiphertext string) ([]byt
 	// Split nonce and ciphertext
 	nonce, ciphertext := data[:nonceSize], data[nonceSize:]
 	// Decrypt the message and check it wasn't tampered with
-	return c.aead.Open(nil, nonce, ciphertext, nil)
+	return c.aead.Open(nil, nonce, ciphertext, aad)
 }

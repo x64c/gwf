@@ -15,8 +15,8 @@ import (
 type SessionManager struct {
 	Conf *SessionConf
 
-	UserCookieCipher      *security.XChaCha20Poly1305Cipher // present iff Conf.UserSession != nil
-	AnonymousCookieCipher *security.XChaCha20Poly1305Cipher // present iff Conf.AnonymousSession != nil
+	UserCookieCipher      security.EncodedCipher // present iff Conf.UserSession != nil
+	AnonymousCookieCipher security.EncodedCipher // present iff Conf.AnonymousSession != nil
 
 	FWUpstream *fwupstream.Hub // upstream subsystem; token I/O delegates here. nil iff this app has no upstream
 
@@ -26,6 +26,19 @@ type SessionManager struct {
 	ParentService svc.StateReporter // the owning session.Service (read-only on State()), for Serving()
 
 	enabled atomic.Bool // the cookie protocol's on/off switch (svc.Switchable)
+}
+
+// UserCookieCipherContext / AnonymousCookieCipherContext are the cipher
+// contexts cookie values are bound to: cookie name + app. Cookie names are
+// package constants shared by every gwf app, so App is what keeps two apps'
+// cookies from decrypting each other's. Every seal/open of a cookie value
+// goes through these — never a hand-built context.
+func (m *SessionManager) UserCookieCipherContext() security.CipherContext {
+	return security.CipherContext{App: m.AppName, Location: UserCookieName}
+}
+
+func (m *SessionManager) AnonymousCookieCipherContext() security.CipherContext {
+	return security.CipherContext{App: m.AppName, Location: AnonymousCookieName}
 }
 
 // Enable / Disable / Enabled implement svc.Switchable — the cookie protocol's

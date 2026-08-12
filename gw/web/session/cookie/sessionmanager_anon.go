@@ -46,7 +46,7 @@ func (m *SessionManager) StoreAnonymousSession(ctx context.Context) (string, err
 	slidingExpiration := time.Duration(m.Conf.AnonymousSession.ExpireIn) * time.Second
 	key := m.AnonymousSessionRowKey(sessionID)
 	fields := map[string]any{"csrf": csrfTkn}
-	if err := m.KVDB.SetFieldsWithTTL(ctx, key, fields, slidingExpiration); err != nil {
+	if err := m.KVDB.HashSetFieldsWithKeyTTL(ctx, key, fields, slidingExpiration); err != nil {
 		return "", err
 	}
 	return sessionID, nil
@@ -55,7 +55,7 @@ func (m *SessionManager) StoreAnonymousSession(ctx context.Context) (string, err
 // FetchAnonymousSession reads the anonymous session row from KVDB.
 // Returns (nil, nil) if the row doesn't exist.
 func (m *SessionManager) FetchAnonymousSession(ctx context.Context, sessionID string) (*AnonymousSessionRow, error) {
-	fields, err := m.KVDB.GetFields(ctx, m.AnonymousSessionRowKey(sessionID), "csrf")
+	fields, err := m.KVDB.HashGetFields(ctx, m.AnonymousSessionRowKey(sessionID), "csrf")
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +108,7 @@ func (m *SessionManager) ExtendAnonymousSessionKVDBWithTTL(ctx context.Context, 
 // anonymous session, with the sessionID encrypted via AnonymousCookieCipher.
 // MaxAge matches Conf.AnonymousSession.ExpireIn. HttpOnly + Secure + SameSite=Lax.
 func (m *SessionManager) SetAnonymousSessionCookie(w http.ResponseWriter, sessionID string) error {
-	encSessionID, err := m.AnonymousCookieCipher.EncryptEncode([]byte(sessionID))
+	encSessionID, err := m.AnonymousCookieCipher.EncryptEncode([]byte(sessionID), m.AnonymousCookieCipherContext())
 	if err != nil {
 		return fmt.Errorf("failed to encrypt anonymous session id. %v", err)
 	}
@@ -160,7 +160,7 @@ func (m *SessionManager) VerifyAnonymousSessionCookie(ctx context.Context, r *ht
 	if err != nil {
 		return errs.CookieNotFound
 	}
-	cookieSessionID, err := m.AnonymousCookieCipher.DecodeDecrypt(sessionCookie.Value)
+	cookieSessionID, err := m.AnonymousCookieCipher.DecodeDecrypt(sessionCookie.Value, m.AnonymousCookieCipherContext())
 	if err != nil {
 		return errs.InvalidCookie.WithCause(err)
 	}

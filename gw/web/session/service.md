@@ -32,8 +32,8 @@ the lifetime of the process.
 - Constructs the Service (`NewService`).
 - Initialises an empty `SessionLocks` store (`lockstore.New()`).
 - Stores the `KVDB` reference (used at cleanup time for existence checks).
-- Registers the Service with `Core.AddService` so the lifecycle loop
-  manages it.
+- Registers the Service with `Core.RegisterService`, which places it in the
+  composition graph the start and terminate walks follow.
 
 After `Prepare`, the app attaches the session managers for whichever
 protocols it uses:

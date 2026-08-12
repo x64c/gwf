@@ -1,7 +1,6 @@
 package framework
 
 import (
-	"encoding/base64"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -20,10 +19,12 @@ import (
 //     is built per id present in the fwClients arg and stored under
 //     c.FWUpstream.Clients[id]. Each gets a shallow clone of c.BaseHttpClient so
 //     per-client transport tweaks don't bleed across.
-//   - token_cipher (optional): the at-rest cipher for upstream OAuth tokens.
-//     Present iff this app stores upstream tokens; absent for JWKS-only
-//     upstreams. Its "enckey" is base64-encoded 32 random bytes (openssl rand
-//     -base64 32), distinct from the cookie session enckey.
+//   - token_cipher (optional): the at-rest keyring for upstream OAuth tokens
+//     ({active, keys{}} — see security.KeyringConf). Present iff this app
+//     stores upstream tokens; absent for JWKS-only upstreams. Each key's
+//     "enckey" is base64-encoded 32 random master bytes (openssl rand -base64
+//     32); the working key is derived per purpose, so this keyring may share
+//     master material with the cookie one without their values ever crossing.
 //
 // The Hub is self-contained — it can be used without sessions (call
 // c.FWUpstream.Clients[...] for outbound requests, or c.FWUpstream's token I/O with
@@ -76,12 +77,11 @@ func (c *Core) PrepareFWUpstream(fwClients map[string]func(*fwupstream.Client)) 
 	}
 
 	// token_cipher is optional — present only when the app stores upstream tokens.
+	// Construction validates the whole keyring (active among keys, key ids,
+	// algs, key material) — misconfiguration is a boot failure here, never a
+	// per-request surprise.
 	if conf.TokenCipher != nil {
-		key, err := base64.StdEncoding.DecodeString(conf.TokenCipher.EncKey)
-		if err != nil {
-			return fmt.Errorf("upstream token_cipher enckey is not valid base64: %v", err)
-		}
-		cipher, err := security.NewXChaCha20Poly1305CipherBase64(key) // validates len == 32
+		cipher, err := security.NewKeyringCipher(conf.TokenCipher, fwupstream.TokenCipherPurpose)
 		if err != nil {
 			return fmt.Errorf("upstream token cipher: %v", err)
 		}

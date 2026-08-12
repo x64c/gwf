@@ -46,7 +46,7 @@ func (m *SessionManager) StoreUserSession(ctx context.Context, uidStr string) (s
 	slidingExpiration := time.Duration(m.Conf.UserSession.ExpireIn) * time.Second
 	key := m.UserSessionRowKey(sessionID)
 	fields := map[string]any{"uid": uidStr, "csrf": csrfTkn}
-	if err := m.KVDB.SetFieldsWithTTL(ctx, key, fields, slidingExpiration); err != nil {
+	if err := m.KVDB.HashSetFieldsWithKeyTTL(ctx, key, fields, slidingExpiration); err != nil {
 		return "", err
 	}
 
@@ -56,7 +56,7 @@ func (m *SessionManager) StoreUserSession(ctx context.Context, uidStr string) (s
 		entry.Lock()
 		defer entry.Unlock()
 
-		if err := m.KVDB.Push(ctx, usrSessionListKey, sessionID); err != nil {
+		if err := m.KVDB.ListPush(ctx, usrSessionListKey, sessionID); err != nil {
 			return "", err
 		}
 
@@ -75,7 +75,7 @@ func (m *SessionManager) StoreUserSession(ctx context.Context, uidStr string) (s
 // FetchUserSession reads the user session row from KVDB.
 // Returns (nil, nil) if the row doesn't exist (session expired or never existed).
 func (m *SessionManager) FetchUserSession(ctx context.Context, sessionID string) (*UserSessionRow, error) {
-	fields, err := m.KVDB.GetFields(ctx, m.UserSessionRowKey(sessionID), "uid", "csrf")
+	fields, err := m.KVDB.HashGetFields(ctx, m.UserSessionRowKey(sessionID), "uid", "csrf")
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +116,7 @@ func (m *SessionManager) DeleteUserSessionKVDB(ctx context.Context, sessionID st
 		entry.Lock()
 		defer entry.Unlock()
 
-		_, _ = m.KVDB.Remove(ctx, usrSessionListKey, 0, sessionID)
+		_, _ = m.KVDB.ListRemove(ctx, usrSessionListKey, 0, sessionID)
 	}
 
 	_, _ = m.KVDB.Delete(ctx, m.UserSessionRowKey(sessionID))
@@ -154,7 +154,7 @@ func (m *SessionManager) ExtendUserSessionKVDBWithTTL(ctx context.Context, sessi
 // session, with the sessionID encrypted via UserCookieCipher. MaxAge matches
 // Conf.UserSession.ExpireIn. HttpOnly + Secure + SameSite=Lax.
 func (m *SessionManager) SetUserSessionCookie(w http.ResponseWriter, sessionID string) error {
-	encSessionID, err := m.UserCookieCipher.EncryptEncode([]byte(sessionID))
+	encSessionID, err := m.UserCookieCipher.EncryptEncode([]byte(sessionID), m.UserCookieCipherContext())
 	if err != nil {
 		return fmt.Errorf("failed to encrypt user session id. %v", err)
 	}
@@ -206,7 +206,7 @@ func (m *SessionManager) VerifyUserSessionCookie(ctx context.Context, r *http.Re
 	if err != nil {
 		return errs.CookieNotFound
 	}
-	cookieSessionID, err := m.UserCookieCipher.DecodeDecrypt(sessionCookie.Value)
+	cookieSessionID, err := m.UserCookieCipher.DecodeDecrypt(sessionCookie.Value, m.UserCookieCipherContext())
 	if err != nil {
 		return errs.InvalidCookie.WithCause(err)
 	}
@@ -233,7 +233,7 @@ func (m *SessionManager) VerifyUserSessionCookie(ctx context.Context, r *http.Re
 // usrSessionListKey is the KVDB list key for this user, formatted as
 // "{appName}:cul:{uidStr}".
 func (m *SessionManager) enforceUserSessionCap(ctx context.Context, usrSessionListKey string) error {
-	sessionCnt, err := m.KVDB.Len(ctx, usrSessionListKey)
+	sessionCnt, err := m.KVDB.ListLen(ctx, usrSessionListKey)
 	if err != nil {
 		return err
 	}
@@ -242,7 +242,7 @@ func (m *SessionManager) enforceUserSessionCap(ctx context.Context, usrSessionLi
 	}
 
 	diff := sessionCnt - m.Conf.UserSession.MaxSessionsPerUser
-	sessionsToDel, err := m.KVDB.Range(ctx, usrSessionListKey, 0, diff-1)
+	sessionsToDel, err := m.KVDB.ListRange(ctx, usrSessionListKey, 0, diff-1)
 	if err != nil {
 		return err
 	}
@@ -251,7 +251,7 @@ func (m *SessionManager) enforceUserSessionCap(ctx context.Context, usrSessionLi
 		keysToDel = append(keysToDel, m.UserSessionRowKey(sid))
 	}
 	_, _ = m.KVDB.Delete(ctx, keysToDel...)
-	if err = m.KVDB.Trim(ctx, usrSessionListKey, diff, -1); err != nil {
+	if err = m.KVDB.ListTrim(ctx, usrSessionListKey, diff, -1); err != nil {
 		return err
 	}
 	return nil
@@ -263,7 +263,7 @@ func (m *SessionManager) enforceUserSessionCap(ctx context.Context, usrSessionLi
 func (m *SessionManager) UserLogoutRedirect(w http.ResponseWriter, r *http.Request, redirectPath string) {
 	sessionCookie, err := r.Cookie(UserCookieName)
 	if err == nil {
-		sessionIDBytes, err := m.UserCookieCipher.DecodeDecrypt(sessionCookie.Value)
+		sessionIDBytes, err := m.UserCookieCipher.DecodeDecrypt(sessionCookie.Value, m.UserCookieCipherContext())
 		if err == nil {
 			_ = m.DeleteUserSessionKVDB(r.Context(), string(sessionIDBytes))
 		}

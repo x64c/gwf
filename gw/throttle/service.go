@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"sync"
 	"time"
 
 	"github.com/x64c/gwf/gw/svc"
@@ -191,7 +190,7 @@ func (s *Service) SetBucketGroup(id string, conf *BucketConf) {
 	}
 	s.groups[id] = &BucketGroup{
 		conf:    conf,
-		buckets: &sync.Map{},
+		buckets: &bucketMap{},
 	}
 }
 
@@ -203,13 +202,7 @@ func (s *Service) Allow(groupID string, bucketID string, now time.Time) bool {
 	if !ok {
 		return false // Invalid groupID -> always Blocked
 	}
-	b, ok := g.GetBucket(bucketID)
-	if ok {
-		return b.Allow(now)
-	}
-	// consume 1 token from the fresh bucket
-	g.SetBucket(bucketID, g.conf.Burst-1, now)
-	return true
+	return g.loadOrCreateBucket(bucketID, now).Allow(now)
 }
 
 // Inspect returns a snapshot of all BucketGroup IDs and their local Bucket IDs.
@@ -220,8 +213,8 @@ func (s *Service) Inspect() map[string][]string {
 
 	for groupID, bucketGroup := range s.groups {
 		var ids []string
-		bucketGroup.buckets.Range(func(localID, _ any) bool {
-			ids = append(ids, localID.(string))
+		bucketGroup.buckets.rangeAll(func(id string, _ *Bucket) bool {
+			ids = append(ids, id)
 			return true
 		})
 		result[groupID] = ids

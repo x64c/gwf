@@ -29,8 +29,8 @@ are immediately invokable after a restart.
 - Reads `.uds.json` for the socket path config.
 - Constructs the `CommandStore`, registers the supplied command set.
 - Constructs the Service (`NewService`) embedding the store.
-- Registers the Service with `Core.AddService` so the lifecycle loop
-  manages it.
+- Registers the Service with `Core.RegisterService`, which places it in the
+  composition graph the start and terminate walks follow.
 
 After `Prepare`, the `CommandStore` is fully populated and queryable
 (`GetHandler(name)`, `PrintHelp(w)`), but nothing serves it — `Start`

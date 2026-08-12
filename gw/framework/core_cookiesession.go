@@ -1,7 +1,6 @@
 package framework
 
 import (
-	"encoding/base64"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
@@ -39,6 +38,12 @@ func (c *Core) PrepareCookieSessions(useFWUpstream bool) error {
 	}
 
 	sessionConf := &cookie.SessionConf{}
+	if keyringBytes, ok := raw["keyring"]; ok {
+		sessionConf.Keyring = &security.KeyringConf{}
+		if err := json.Unmarshal(keyringBytes, sessionConf.Keyring); err != nil {
+			return fmt.Errorf("unmarshal keyring: %v", err)
+		}
+	}
 	if userBytes, ok := raw["user"]; ok {
 		sessionConf.UserSession = &cookie.UserSessionConf{}
 		if err := json.Unmarshal(userBytes, sessionConf.UserSession); err != nil {
@@ -69,17 +74,21 @@ func (c *Core) PrepareCookieSessions(useFWUpstream bool) error {
 		mgr.FWUpstream = c.FWUpstream
 	}
 
-	// enckey is stored base64-encoded in config (32 random bytes → base64).
-	// Generate with: openssl rand -base64 32
+	// One keyring serves both shapes; each shape's cipher is derived under its
+	// own purpose label. Construction validates the whole keyring (active
+	// among keys, key ids, algs, key material) — misconfiguration is a boot
+	// failure here, never a per-request surprise. Each key's "enckey" is
+	// base64-encoded 32 random master bytes: openssl rand -base64 32
+	if sessionConf.UserSession != nil || sessionConf.AnonymousSession != nil {
+		if sessionConf.Keyring == nil {
+			return errors.New("cookie sessions: no \"keyring\" in .web-cookie-session.json")
+		}
+	}
 	if sessionConf.UserSession != nil {
 		if err := sessionConf.UserSession.Validate(); err != nil {
 			return err
 		}
-		keyBytes, err := base64.StdEncoding.DecodeString(sessionConf.UserSession.EncryptionKey)
-		if err != nil {
-			return fmt.Errorf("user cookie enckey is not valid base64: %v", err)
-		}
-		cipher, err := security.NewXChaCha20Poly1305CipherBase64(keyBytes) // validates len == 32 post-decode
+		cipher, err := security.NewKeyringCipher(sessionConf.Keyring, cookie.UserCookieCipherPurpose)
 		if err != nil {
 			return fmt.Errorf("user cookie cipher: %v", err)
 		}
@@ -89,11 +98,7 @@ func (c *Core) PrepareCookieSessions(useFWUpstream bool) error {
 		if err := sessionConf.AnonymousSession.Validate(); err != nil {
 			return err
 		}
-		keyBytes, err := base64.StdEncoding.DecodeString(sessionConf.AnonymousSession.EncryptionKey)
-		if err != nil {
-			return fmt.Errorf("anonymous cookie enckey is not valid base64: %v", err)
-		}
-		cipher, err := security.NewXChaCha20Poly1305CipherBase64(keyBytes) // validates len == 32 post-decode
+		cipher, err := security.NewKeyringCipher(sessionConf.Keyring, cookie.AnonymousCookieCipherPurpose)
 		if err != nil {
 			return fmt.Errorf("anonymous cookie cipher: %v", err)
 		}

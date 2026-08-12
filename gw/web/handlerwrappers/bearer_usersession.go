@@ -18,7 +18,16 @@ import (
 // Returns 401 if the token is missing or invalid. Returns 403 if the session is
 // userless (wrong shape) or its group isn't in AllowedGroups.
 type BearerUserSession[UID comparable] struct {
-	AppProvider   framework.AppProviderFunc
+	AppProvider framework.AppProviderFunc
+	// ParseUID converts the stored identity into the app's UID type. What is
+	// stored is always a string — that is what a KVDB holds — so this is where
+	// a string becomes an identity.
+	//
+	// It MUST return an error for any string that does not name one, the empty
+	// string included. Nothing else can make that judgement: only the app knows
+	// what its UID type admits. The userless check below is not that judgement —
+	// it asks which KIND of session arrived, since bearer has userless ones and
+	// this wrapper requires user-bound.
 	ParseUID      func(string) (UID, error)
 	AllowedGroups []string // empty = accept any group from config
 }
@@ -59,7 +68,7 @@ func (m *BearerUserSession[UID]) Wrap(inner http.Handler) http.Handler {
 
 		// Two-hop: access token hash → sid → umbrella row
 		hash := security.HashHexSHA256(accessToken)
-		sid, found, err := mgr.KVDB.Get(ctx, mgr.AccessTokenRowKey(hash))
+		sid, found, err := mgr.KVDB.ValueGet(ctx, mgr.AccessTokenRowKey(hash))
 		if err != nil {
 			responses.WriteErrorJSON(w, http.StatusInternalServerError, errs.KVDB.Wrap(err))
 			return
@@ -74,7 +83,9 @@ func (m *BearerUserSession[UID]) Wrap(inner http.Handler) http.Handler {
 			return
 		}
 		if row == nil {
-			responses.WriteErrorJSON(w, http.StatusUnauthorized, errs.AccessTokenNotFound)
+			// The token resolved, so it is not the credential that is missing —
+			// the session it points at has ended.
+			responses.WriteErrorJSON(w, http.StatusUnauthorized, errs.BearerSessionNotFound)
 			return
 		}
 

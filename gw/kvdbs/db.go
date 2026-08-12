@@ -3,16 +3,82 @@ package kvdbs
 import (
 	"context"
 	"time"
+
+	"github.com/x64c/gwf/gw/clock"
 )
 
+// DB is one key-value database reached through a Client.
+//
+// TIME. Questions here are asked in the caller's terms — a lifetime is a
+// time.Duration, and Exists reports whether the key is there now. An
+// implementation answers them on its own clock, which advances in discrete
+// ticks and holds nothing between them. Clock reports it.
+//
+// A lifetime is placed by reading both of its ends onto that clock, and the key
+// then holds its final mark until the clock leaves it. Given a precision P,
+// that is what a caller may rely on:
+//
+//   - The stored lifetime COVERS the one asked for. It can run over by less
+//     than P; it does not fall short.
+//   - A duration read back is accurate to within P.
+//
+// Both hold for any lifetime the clock can hold, which is P and up. Shorter
+// than P may span no mark at all, depending where it falls, and a span of no
+// marks is no time.
+//
+// Zero therefore means one thing everywhere it appears, whatever the verb: a
+// lifetime already over, so the key goes. Nothing is stored for no time, and
+// nothing outlives a lifetime of none. Storing without a lifetime is a separate
+// operation with its own name (ValueSetPersistent), as is dropping one (Persist), so
+// neither has to be smuggled in as a duration that means its opposite.
+//
+// Lifetimes are not negative; an implementation rejects a negative duration
+// rather than inventing a meaning for it.
+//
+// How an implementation gets there — where it anchors, which of its backend's
+// commands it reaches for — is its own business. Meeting this at the P it
+// publishes is not, so that any caller can predict its behavior from P alone,
+// and check it.
+//
+// VALUES. What a store holds is a string, which is why ValueGet and the hash readers
+// return one. Writes take any as a convenience: an implementation accepts
+// whichever types it can encode, and how it encodes them is its own business —
+// this interface neither specifies that nor can see it.
+//
+// One guarantee, and it is the identity one: a string written is the same
+// string read back, byte for byte. Nothing is promised about the stored form of
+// any other type, nor about whether a given implementation accepts it at all.
+//
+// So: when the stored representation matters — a layout something else will
+// parse, a value another implementation may later serve — produce it yourself
+// and write a string. Passing a non-string is for values whose exact bytes you
+// have no stake in. A time is the clearest case to convert yourself: RFC 3339,
+// epoch seconds and epoch nanoseconds all encode an instant, and a stored one
+// is meaningless unless every later reader agrees which was used.
 type DB interface {
+	// Clock is the clock this implementation answers time on. Its precision is
+	// the tick the guarantees above are stated in, and it renders instants the
+	// same way the implementation does, so a caller can place a deadline itself
+	// rather than re-deriving the arithmetic. Constant for the life of the DB.
+	Clock() clock.Clock
+
 	//---- Key Ops ----
 
 	Exists(ctx context.Context, key string) (bool, error)
 	TTL(ctx context.Context, key string) (time.Duration, TTLState, error)
 	Delete(ctx context.Context, keys ...string) (int64, error)
-	// Expire sets/updates expiration for a key
+	// Expire gives a key a lifetime, ending it that far from now. Here the
+	// duration IS the subject, so a lifetime of zero is one already over and
+	// the key is removed — as is one shorter than the clock's precision, which
+	// spans no mark and is therefore no time at all.
 	Expire(ctx context.Context, key string, expiration time.Duration) (bool, error) // found & updated, err
+	// Persist removes a key's lifetime, leaving it stored with no expiry.
+	// "Never expires" is an operation rather than a lifetime, so it has no
+	// spelling as a duration and cannot be passed to Expire by mistake.
+	//
+	// Reports whether a lifetime was removed. False covers both a missing key
+	// and one that already had none — TTL tells those apart.
+	Persist(ctx context.Context, key string) (bool, error)
 	// Type returns the string representation of the value type stored at the given key.
 	Type(ctx context.Context, key string) (string, error)
 
@@ -27,30 +93,85 @@ type DB interface {
 
 	//---- Single-value Ops ----
 
-	Set(ctx context.Context, key string, value any, expiration time.Duration) error
-	Get(ctx context.Context, key string) (string, bool, error) // val, found, err
+	// ValueSet stores a value under key for the given lifetime. A lifetime of zero is
+	// one already over, so the key is removed and the value never exists — as
+	// with any lifetime too short to span a mark. Use ValueSetPersistent to store
+	// without a lifetime; there is no spelling of "no lifetime" as a duration.
+	ValueSet(ctx context.Context, key string, value any, expiration time.Duration) error
+	// ValueSetPersistent stores a value under key with no lifetime, removing any the
+	// key already had.
+	ValueSetPersistent(ctx context.Context, key string, value any) error
+	ValueGet(ctx context.Context, key string) (string, bool, error) // val, found, err
 
 	//---- List Ops ----
 
-	Push(ctx context.Context, key string, value string) error
-	Pop(ctx context.Context, key string) (string, bool, error) // val, found, err
-	Len(ctx context.Context, key string) (int64, error)
-	Range(ctx context.Context, key string, start int64, stop int64) ([]string, error) // 0-basis, stop inclusive
-	Remove(ctx context.Context, key string, cnt int64, value any) (int64, error)      // cnt = removed dups. 0 = all
-	Trim(ctx context.Context, key string, start int64, stop int64) error              // 0-basis, stop inclusive
+	ListPush(ctx context.Context, key string, value string) error
+	ListPop(ctx context.Context, key string) (string, bool, error) // val, found, err
+	ListLen(ctx context.Context, key string) (int64, error)
+	ListRange(ctx context.Context, key string, start int64, stop int64) ([]string, error) // 0-basis, stop inclusive
+	ListRemove(ctx context.Context, key string, cnt int64, value any) (int64, error)      // cnt = removed dups. 0 = all
+	ListTrim(ctx context.Context, key string, start int64, stop int64) error              // 0-basis, stop inclusive
 
 	//---- Hash Ops ----
+	//
+	// The writes come in two families, differing only in whether the key may be
+	// created:
+	//
+	//	HashSet…          upsert: writes the fields, creating the key when absent.
+	//	HashSet…IfExists  update-only: writes the fields when the key already
+	//	              exists, and never creates it.
+	//
+	// Pick by whether creation is correct for the caller. Where a key's
+	// existence is itself meaningful — absence means gone, or the key's
+	// lifetime is owned elsewhere — the upsert family recreates it, and only
+	// the IfExists family states what such a caller means.
 
-	SetField(ctx context.Context, key string, field string, value any) error
-	// SetFieldWithTTL atomically sets a single field on a hash and assigns the key's TTL.
-	SetFieldWithTTL(ctx context.Context, key string, field string, value any, ttl time.Duration) error
-	SetFields(ctx context.Context, key string, fields map[string]any) error
-	// SetFieldsWithTTL atomically sets multiple fields on a hash and assigns the key's TTL.
-	SetFieldsWithTTL(ctx context.Context, key string, fields map[string]any, ttl time.Duration) error
-	GetField(ctx context.Context, key string, field string) (string, bool, error) // val, found, err
-	// GetFields returns values of found fields. By comparing lengths, you can check if all fields are found
-	GetFields(ctx context.Context, key string, fields ...string) (map[string]string, error)
-	// RemoveFields removes the specified fields in a hash key. Returns the number of fields actually removed.
-	RemoveFields(ctx context.Context, key string, fields ...string) (int64, error)
-	GetAllFields(ctx context.Context, key string) (map[string]string, error)
+	// HashSetField sets one field, creating the key if absent. A key created here
+	// has no TTL; an existing key keeps the TTL it already had.
+	HashSetField(ctx context.Context, key string, field string, value any) error
+	// HashSetFieldWithKeyTTL atomically sets one field and assigns the key's TTL,
+	// creating the key if absent. The TTL is assigned unconditionally: an
+	// existing key's remaining lifetime is replaced by ttl.
+	HashSetFieldWithKeyTTL(ctx context.Context, key string, field string, value any, ttl time.Duration) error
+	// HashSetFields sets multiple fields, creating the key if absent. A key created
+	// here has no TTL; an existing key keeps the TTL it already had.
+	HashSetFields(ctx context.Context, key string, fields map[string]any) error
+	// HashSetFieldsWithKeyTTL atomically sets multiple fields and assigns the key's
+	// TTL, creating the key if absent. The TTL is assigned unconditionally: an
+	// existing key's remaining lifetime is replaced by ttl.
+	HashSetFieldsWithKeyTTL(ctx context.Context, key string, fields map[string]any, ttl time.Duration) error
+
+	// HashSetFieldIfExists sets one field only if the key already exists, and never
+	// creates it. Reports whether the key existed, which is whether the write
+	// happened. The key's TTL is left unchanged.
+	//
+	// The existence test and the write MUST be one indivisible operation. A
+	// backend that performs them separately offers nothing over the caller
+	// running Exists then HashSetField, which is the race this exists to remove; if
+	// it cannot be done indivisibly, return ErrNotSupported rather than
+	// emulating it.
+	HashSetFieldIfExists(ctx context.Context, key string, field string, value any) (bool, error) // existed (and written), err
+	// HashSetFieldWithKeyTTLIfExists atomically sets one field and assigns the key's
+	// TTL, only if the key already exists, and never creates it. Reports
+	// whether the key existed. Indivisible, as HashSetFieldIfExists requires.
+	HashSetFieldWithKeyTTLIfExists(ctx context.Context, key string, field string, value any, ttl time.Duration) (bool, error)
+	// HashSetFieldsIfExists sets multiple fields only if the key already exists,
+	// and never creates it. Reports whether the key existed. The key's TTL is
+	// left unchanged. Indivisible, as HashSetFieldIfExists requires.
+	HashSetFieldsIfExists(ctx context.Context, key string, fields map[string]any) (bool, error)
+	// HashSetFieldsWithKeyTTLIfExists atomically sets multiple fields and assigns the
+	// key's TTL, only if the key already exists, and never creates it. Reports
+	// whether the key existed. Indivisible, as HashSetFieldIfExists requires.
+	HashSetFieldsWithKeyTTLIfExists(ctx context.Context, key string, fields map[string]any, ttl time.Duration) (bool, error)
+
+	HashGetField(ctx context.Context, key string, field string) (string, bool, error) // val, found, err
+	// HashGetFields returns values of found fields. By comparing lengths, you can check if all fields are found.
+	// Fields that are absent are omitted from the map, so a missing key and a key holding none of the
+	// requested fields both return an empty map — use Exists to tell those apart.
+	HashGetFields(ctx context.Context, key string, fields ...string) (map[string]string, error)
+	// HashRemoveFields removes the specified fields in a hash key. Returns the number of fields actually removed.
+	HashRemoveFields(ctx context.Context, key string, fields ...string) (int64, error)
+	// HashGetAll returns every field of the hash. A missing key and an empty hash are
+	// indistinguishable here — both return an empty map.
+	HashGetAll(ctx context.Context, key string) (map[string]string, error)
 }

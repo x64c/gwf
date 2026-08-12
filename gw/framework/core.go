@@ -16,7 +16,6 @@ import (
 	"github.com/x64c/gwf/gw/sqldbs"
 	"github.com/x64c/gwf/gw/storages"
 	"github.com/x64c/gwf/gw/svc"
-	"github.com/x64c/gwf/gw/tg"
 	"github.com/x64c/gwf/gw/throttle"
 	"github.com/x64c/gwf/gw/uds"
 	"github.com/x64c/gwf/gw/web"
@@ -48,7 +47,6 @@ type Core struct {
 	SQLDBClients         map[string]sqldbs.Client                 `json:"-"`                      // PrepareSQLDBClients
 	HTMLTemplateStore    map[string]map[string]*template.Template `json:"-"`                      // PrepareHTMLTemplateStore
 	FWUpstream           *fwupstream.Hub                          `json:"-"`                      // PrepareFWUpstream (.fwupstream-web.json): FW clients + at-rest token store
-	TypedGroupRegistry   map[string]tg.RegGrp                     `json:"-"`                      // Group Registry for typed groups
 	KVDBClients          map[string]kvdbs.Client                  `json:"-"`                      // PrepareKVDBClients
 	MainKVDB             kvdbs.DB                                 `json:"-"`                      // From KVDBClients or set directly
 	LocalStorages        map[string]*storages.LocalStorage        `json:"-"`                      // PrepareStorages

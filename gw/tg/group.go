@@ -1,18 +1,14 @@
-// Package tg provides a typed group registry.
-// It allows registering and retrieving typed items by string ID,
-// grouped under a common interface.
+// Package tg provides TypedGroup: a typed, ID-keyed, order-preserving,
+// boot-frozen collection. Apps hold each group in their own typed field
+// (e.g. an LMS provider group) — the framework offers the type, not a home
+// for the instances: a type-erased central registry could answer nothing
+// typed about groups whose type parameters only the app can name.
 package tg
 
-// RegGrp is the non-generic interface that all typed groups satisfy.
-// This allows storing different TypedGroup[T] instances in a single map.
-type RegGrp interface {
-	Has(id string) bool
-	Len() int
-	IDs() []string
-}
+import "fmt"
 
 // TypedGroup is a generic, ID-keyed collection of items sharing the same type.
-// Registration order is preserved.
+// Registration order is preserved. Populate at boot, read thereafter.
 type TypedGroup[T any] struct {
 	ids   []string
 	items map[string]T
@@ -25,10 +21,20 @@ func NewTypedGroup[T any]() *TypedGroup[T] {
 	}
 }
 
-// Register adds an item to the group with the given ID.
-func (g *TypedGroup[T]) Register(id string, item T) {
+// Register adds an item under id, rejecting an empty or already-registered
+// id by name. The refusal is what keeps the group's order (ids) and lookup
+// (items) views agreeing: an overwrite would count twice and double in All
+// while the first item silently vanished.
+func (g *TypedGroup[T]) Register(id string, item T) error {
+	if id == "" {
+		return fmt.Errorf("tg: empty id")
+	}
+	if _, dup := g.items[id]; dup {
+		return fmt.Errorf("tg: id %q already registered", id)
+	}
 	g.ids = append(g.ids, id)
 	g.items[id] = item
+	return nil
 }
 
 // Get retrieves an item by ID.
@@ -60,10 +66,4 @@ func (g *TypedGroup[T]) Len() int {
 // IDs returns all registered IDs in registration order.
 func (g *TypedGroup[T]) IDs() []string {
 	return g.ids
-}
-
-// From extracts a *TypedGroup[T] from a RegGrp interface.
-// Intended for one-time use at boot to create typed shortcuts.
-func From[T any](g RegGrp) *TypedGroup[T] {
-	return g.(*TypedGroup[T])
 }

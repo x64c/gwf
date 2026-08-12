@@ -10,13 +10,15 @@ import (
 	"github.com/x64c/gwf/gw/nullable"
 )
 
-// LoadBelongsTo - Load Parents on Children from SQL DB and Link Child-BelongsTo-Parent Relation
-// Returns the Parents
-func LoadBelongsTo[
+// The collection DBModel relation loaders.
+
+// LoadDBModelBelongsTo - Load Parents on Children from SQL DB and Link
+// Child-BelongsTo-Parent Relation. Returns the Parents.
+func LoadDBModelBelongsTo[
 	CP model.Identifiable[CID],
 	CID comparable,
-	P any, // Model struct
-	PP ScannableIdentifiable[P, PID],
+	P any,
+	PP IdentifiableDBModel[P, PID],
 	PID comparable,
 ](
 	ctx context.Context,
@@ -33,8 +35,12 @@ func LoadBelongsTo[
 	if len(fKeysAsAny) == 0 {
 		return coll.NewEmptyOrderedCollection[PP, PID](), nil
 	}
-	sqlStmt := sqlSelectBase + fmt.Sprintf(" WHERE id IN (%s)", db.Client().InPlaceholders(1, len(fKeysAsAny)))
-	parents, err := RawQueryCollection[P, PP, PID](ctx, db, sqlStmt, fKeysAsAny...)
+	var zeroParent P
+	pkCol, err := PP(&zeroParent).Table().SinglePKColumn()
+	if err != nil {
+		return nil, fmt.Errorf("LoadDBModelBelongsTo: %w", err)
+	}
+	parents, err := QueryDBModelCollectionByColumn[P, PP, PID, any](ctx, db, sqlSelectBase, pkCol, fKeysAsAny)
 	if err != nil {
 		return nil, err
 	}
@@ -45,18 +51,18 @@ func LoadBelongsTo[
 	return parents, nil
 }
 
-// LoadOptionalBelongsTo - Load Parents on Children from SQL DB and Link Child-BelongsTo-Parent Relation.
-// Handles two cases:
+// LoadDBModelOptionalBelongsTo - Load Parents on Children from SQL DB and Link
+// Child-BelongsTo-Parent Relation. Handles two cases:
 //  1. FK (pointer to parent) in child is nil → skipped
 //  2. Missing parent (child has FK but no matching parent in DB) → tolerant (allowed)
 //
-// In both cases the child's relation field is left nil; nil check required when accessing.
-// Returns the Parent Collection.
-func LoadOptionalBelongsTo[
+// In both cases the child's relation field is left nil; nil check required
+// when accessing. Returns the Parent Collection.
+func LoadDBModelOptionalBelongsTo[
 	CP model.Identifiable[CID],
 	CID comparable,
-	P any, // Model struct
-	PP ScannableIdentifiable[P, PID],
+	P any,
+	PP IdentifiableDBModel[P, PID],
 	PID comparable,
 ](
 	ctx context.Context,
@@ -82,8 +88,12 @@ func LoadOptionalBelongsTo[
 	if len(fKeysAsAny) == 0 {
 		return coll.NewEmptyOrderedCollection[PP, PID](), nil
 	}
-	sqlStmt := sqlSelectBase + fmt.Sprintf(" WHERE id IN (%s)", db.Client().InPlaceholders(1, len(fKeysAsAny)))
-	parents, err := RawQueryCollection[P, PP, PID](ctx, db, sqlStmt, fKeysAsAny...)
+	var zeroParent P
+	pkCol, err := PP(&zeroParent).Table().SinglePKColumn()
+	if err != nil {
+		return nil, fmt.Errorf("LoadDBModelOptionalBelongsTo: %w", err)
+	}
+	parents, err := QueryDBModelCollectionByColumn[P, PP, PID, any](ctx, db, sqlSelectBase, pkCol, fKeysAsAny)
 	if err != nil {
 		return nil, err
 	}
@@ -91,15 +101,15 @@ func LoadOptionalBelongsTo[
 	return parents, nil
 }
 
-// LoadNullableBelongsTo - Convenience wrapper around LoadOptionalBelongsTo for nullable FK fields
-// typed as nullable.Nullable[PID].
-// Extracts the FK pointer via Ptr() and delegates.
+// LoadDBModelNullableBelongsTo - Convenience wrapper around
+// LoadDBModelOptionalBelongsTo for nullable FK fields typed as
+// nullable.Nullable[PID]. Extracts the FK pointer via Ptr() and delegates.
 // Returns the Parent Collection.
-func LoadNullableBelongsTo[
+func LoadDBModelNullableBelongsTo[
 	CP model.Identifiable[CID],
 	CID comparable,
-	P any, // Model struct
-	PP ScannableIdentifiable[P, PID],
+	P any,
+	PP IdentifiableDBModel[P, PID],
 	PID comparable,
 ](
 	ctx context.Context,
@@ -112,18 +122,18 @@ func LoadNullableBelongsTo[
 	*coll.Collection[PP, PID],
 	error,
 ) {
-	return LoadOptionalBelongsTo[CP, CID, P, PP, PID](
+	return LoadDBModelOptionalBelongsTo[CP, CID, P, PP, PID](
 		ctx, db, children, sqlSelectBase,
 		func(c CP) *PID { return nullableFKField(c).Ptr() },
 		relationFieldPtr,
 	)
 }
 
-func LoadHasMany[
+func LoadDBModelHasMany[
 	PP model.Identifiable[PID],
 	PID comparable,
-	C any, // Model struct
-	CP ScannableIdentifiable[C, CID],
+	C any,
+	CP IdentifiableDBModel[C, CID],
 	CID comparable,
 ](
 	ctx context.Context,
@@ -141,7 +151,7 @@ func LoadHasMany[
 	whereClause := fmt.Sprintf(" WHERE %s IN (%s)", foreignKeyColumn.Name(), db.Client().InPlaceholders(1, parents.Len()))
 	sqlStmt := sqlSelectBase + whereClause + OrderByClause(orderBys)
 	parentIDsAsAny := parents.IDsAsAny()
-	children, err := RawQueryCollection[C, CP, CID](ctx, db, sqlStmt, parentIDsAsAny...)
+	children, err := RawQueryDBModelCollection[C, CP, CID](ctx, db, sqlStmt, parentIDsAsAny...)
 	if err != nil {
 		return nil, err
 	}
@@ -154,12 +164,13 @@ func LoadHasMany[
 	return children, nil
 }
 
-// LoadHasManyQueryOpts - Same as LoadHasMany but with QueryOpts for WHERE conditions and ORDER BY.
-func LoadHasManyQueryOpts[
+// LoadDBModelHasManyQueryOpts - Same as LoadDBModelHasMany but with QueryOpts
+// for WHERE conditions and ORDER BY.
+func LoadDBModelHasManyQueryOpts[
 	PP model.Identifiable[PID],
 	PID comparable,
-	C any, // Model struct
-	CP ScannableIdentifiable[C, CID],
+	C any,
+	CP IdentifiableDBModel[C, CID],
 	CID comparable,
 ](
 	ctx context.Context,
@@ -180,7 +191,7 @@ func LoadHasManyQueryOpts[
 	}
 	whereSQL, args := WhereClause{cond}.Build(db.Client(), 1)
 	sqlStmt := sqlSelectBase + whereSQL + OrderByClause(queryOpts.OrderBys)
-	children, err := RawQueryCollection[C, CP, CID](ctx, db, sqlStmt, args...)
+	children, err := RawQueryDBModelCollection[C, CP, CID](ctx, db, sqlStmt, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -193,12 +204,13 @@ func LoadHasManyQueryOpts[
 	return children, nil
 }
 
-// LoadBelongsToWithStoreKey wraps LoadBelongsTo with a RawSQLStore key lookup.
-func LoadBelongsToWithStoreKey[
+// LoadDBModelBelongsToWithStoreKey wraps LoadDBModelBelongsTo with a
+// RawSQLStore key lookup.
+func LoadDBModelBelongsToWithStoreKey[
 	CP model.Identifiable[CID],
 	CID comparable,
 	P any,
-	PP ScannableIdentifiable[P, PID],
+	PP IdentifiableDBModel[P, PID],
 	PID comparable,
 ](
 	ctx context.Context,
@@ -215,15 +227,16 @@ func LoadBelongsToWithStoreKey[
 	if !ok {
 		return nil, errs.SQLNotFoundInStore.WithDetail(storeKey)
 	}
-	return LoadBelongsTo[CP, CID, P, PP, PID](ctx, db, children, sqlBase, foreignKey, relationFieldPtr)
+	return LoadDBModelBelongsTo[CP, CID, P, PP, PID](ctx, db, children, sqlBase, foreignKey, relationFieldPtr)
 }
 
-// LoadOptionalBelongsToWithStoreKey wraps LoadOptionalBelongsTo with a RawSQLStore key lookup.
-func LoadOptionalBelongsToWithStoreKey[
+// LoadDBModelOptionalBelongsToWithStoreKey wraps LoadDBModelOptionalBelongsTo
+// with a RawSQLStore key lookup.
+func LoadDBModelOptionalBelongsToWithStoreKey[
 	CP model.Identifiable[CID],
 	CID comparable,
 	P any,
-	PP ScannableIdentifiable[P, PID],
+	PP IdentifiableDBModel[P, PID],
 	PID comparable,
 ](
 	ctx context.Context,
@@ -240,15 +253,16 @@ func LoadOptionalBelongsToWithStoreKey[
 	if !ok {
 		return nil, errs.SQLNotFoundInStore.WithDetail(storeKey)
 	}
-	return LoadOptionalBelongsTo[CP, CID, P, PP, PID](ctx, db, children, sqlBase, foreignKeyFieldPtr, relationFieldPtr)
+	return LoadDBModelOptionalBelongsTo[CP, CID, P, PP, PID](ctx, db, children, sqlBase, foreignKeyFieldPtr, relationFieldPtr)
 }
 
-// LoadNullableBelongsToWithStoreKey wraps LoadNullableBelongsTo with a RawSQLStore key lookup.
-func LoadNullableBelongsToWithStoreKey[
+// LoadDBModelNullableBelongsToWithStoreKey wraps LoadDBModelNullableBelongsTo
+// with a RawSQLStore key lookup.
+func LoadDBModelNullableBelongsToWithStoreKey[
 	CP model.Identifiable[CID],
 	CID comparable,
 	P any,
-	PP ScannableIdentifiable[P, PID],
+	PP IdentifiableDBModel[P, PID],
 	PID comparable,
 ](
 	ctx context.Context,
@@ -265,15 +279,16 @@ func LoadNullableBelongsToWithStoreKey[
 	if !ok {
 		return nil, errs.SQLNotFoundInStore.WithDetail(storeKey)
 	}
-	return LoadNullableBelongsTo[CP, CID, P, PP, PID](ctx, db, children, sqlBase, nullableFKField, relationFieldPtr)
+	return LoadDBModelNullableBelongsTo[CP, CID, P, PP, PID](ctx, db, children, sqlBase, nullableFKField, relationFieldPtr)
 }
 
-// LoadHasManyWithStoreKey wraps LoadHasMany with a RawSQLStore key lookup and FK column name.
-func LoadHasManyWithStoreKey[
+// LoadDBModelHasManyWithStoreKey wraps LoadDBModelHasMany with a RawSQLStore
+// key lookup and FK column name.
+func LoadDBModelHasManyWithStoreKey[
 	PP model.Identifiable[PID],
 	PID comparable,
 	C any,
-	CP ScannableIdentifiable[C, CID],
+	CP IdentifiableDBModel[C, CID],
 	CID comparable,
 ](
 	ctx context.Context,
@@ -293,15 +308,16 @@ func LoadHasManyWithStoreKey[
 	if err != nil {
 		return nil, fmt.Errorf("invalid foreign key column name %q", fkColumnName)
 	}
-	return LoadHasMany[PP, PID, C, CP, CID](ctx, db, parents, sqlBase, fkCol, foreignKey, relationFieldPtr, orderBys...)
+	return LoadDBModelHasMany[PP, PID, C, CP, CID](ctx, db, parents, sqlBase, fkCol, foreignKey, relationFieldPtr, orderBys...)
 }
 
-// LoadHasManyQueryOptsWithStoreKey wraps LoadHasManyQueryOpts with a RawSQLStore key lookup and FK column name.
-func LoadHasManyQueryOptsWithStoreKey[
+// LoadDBModelHasManyQueryOptsWithStoreKey wraps LoadDBModelHasManyQueryOpts
+// with a RawSQLStore key lookup and FK column name.
+func LoadDBModelHasManyQueryOptsWithStoreKey[
 	PP model.Identifiable[PID],
 	PID comparable,
 	C any,
-	CP ScannableIdentifiable[C, CID],
+	CP IdentifiableDBModel[C, CID],
 	CID comparable,
 ](
 	ctx context.Context,
@@ -321,5 +337,5 @@ func LoadHasManyQueryOptsWithStoreKey[
 	if err != nil {
 		return nil, fmt.Errorf("invalid foreign key column name %q", fkColumnName)
 	}
-	return LoadHasManyQueryOpts[PP, PID, C, CP, CID](ctx, db, parents, sqlBase, fkCol, foreignKey, relationFieldPtr, queryOpts)
+	return LoadDBModelHasManyQueryOpts[PP, PID, C, CP, CID](ctx, db, parents, sqlBase, fkCol, foreignKey, relationFieldPtr, queryOpts)
 }

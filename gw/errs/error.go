@@ -14,11 +14,20 @@ func (e *Error) Error() string {
 }
 
 // Is implements stdlib errors.Is interface. Walks the target chain via AsType
-// to find an *Error and compare codes. Handles bare sentinels and wrapped
-// sentinels uniformly.
+// to find an *Error and compare identity — Name AND Code. Handles bare
+// sentinels and wrapped sentinels uniformly (the wrap family copies both
+// fields).
+//
+// Identity is the pair because neither field alone is owned: the code space
+// has no allocation authority (an app sentinel can collide with a framework
+// code — and every legacy zero-code error would equal every other), and names
+// can repeat across packages just as freely. Requiring both means only true
+// copies of a sentinel compare equal, and a half-renumbered pair fails closed
+// (matches nothing) instead of matching someone else's error. Code-only
+// comparison, where wanted, is IsSameCode — named for what it does.
 func (e *Error) Is(target error) bool {
 	if t, ok := errors.AsType[*Error](target); ok {
-		return e.Code == t.Code
+		return e.Code == t.Code && e.Name == t.Name
 	}
 	return false
 }

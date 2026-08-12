@@ -9,15 +9,17 @@ import (
 	"github.com/x64c/gwf/gw/model"
 )
 
-// LoadBelongsToOnItem - LoadBelongsTo for a single child item.
-// Uses QueryFirst directly — no collection wrapping overhead.
-// BelongsTo is strict: a missing parent surfaces as ErrNoRows from QueryFirst.
+// The single-item DBModel relation loaders.
+
+// LoadDBModelBelongsToOnItem - LoadDBModelBelongsTo for a single child item.
+// Uses QueryDBModelFirst directly — no collection wrapping overhead.
+// BelongsTo is strict: a missing parent surfaces as ErrNoRows.
 // Writes the parent to *relationFieldPtr(child) and returns it.
-func LoadBelongsToOnItem[
+func LoadDBModelBelongsToOnItem[
 	CP model.Identifiable[CID],
 	CID comparable,
 	P any,
-	PP ScannableIdentifiable[P, PID],
+	PP IdentifiableDBModel[P, PID],
 	PID comparable,
 ](
 	ctx context.Context,
@@ -26,28 +28,32 @@ func LoadBelongsToOnItem[
 	sqlSelectBase string,
 	foreignKey func(c CP) PID,
 	relationFieldPtr func(c CP) *PP,
-) (*P, error) {
-	var zero P
-	pkCol, _ := NewColumn(PP(&zero).TableMeta().PK)
-	parent, err := QueryFirst[P, PP](ctx, db, sqlSelectBase, QueryOpts{
+) (PP, error) {
+	var zero PP
+	var zeroParent P
+	pkCol, err := PP(&zeroParent).Table().SinglePKColumn()
+	if err != nil {
+		return zero, fmt.Errorf("LoadDBModelBelongsToOnItem: %w", err)
+	}
+	parent, err := QueryDBModelFirst[P, PP](ctx, db, sqlSelectBase, QueryOpts{
 		WhereCond: BinPred{Column: pkCol, Op: OpEq, Value: foreignKey(child)},
 	})
 	if err != nil {
-		return nil, err
+		return zero, err
 	}
-	*relationFieldPtr(child) = PP(parent)
+	*relationFieldPtr(child) = parent
 	return parent, nil
 }
 
-// LoadHasManyOnItem - LoadHasMany for a single parent item.
-// Uses QueryCollection — no parent-collection wrapping overhead and no grouping step
-// (all queried children belong to the one parent by SQL filter).
+// LoadDBModelHasManyOnItem - LoadDBModelHasMany for a single parent item.
+// Uses QueryDBModelCollection — no parent-collection wrapping overhead and no
+// grouping step (all queried children belong to the one parent by SQL filter).
 // Writes the children collection to *relationFieldPtr(parent) and returns it.
-func LoadHasManyOnItem[
+func LoadDBModelHasManyOnItem[
 	PP model.Identifiable[PID],
 	PID comparable,
 	C any,
-	CP ScannableIdentifiable[C, CID],
+	CP IdentifiableDBModel[C, CID],
 	CID comparable,
 ](
 	ctx context.Context,
@@ -58,7 +64,7 @@ func LoadHasManyOnItem[
 	relationFieldPtr func(PP) **coll.Collection[CP, CID],
 	orderBys ...OrderBy,
 ) (*coll.Collection[CP, CID], error) {
-	children, err := QueryCollection[C, CP, CID](ctx, db, sqlSelectBase, QueryOpts{
+	children, err := QueryDBModelCollection[C, CP, CID](ctx, db, sqlSelectBase, QueryOpts{
 		WhereCond: BinPred{Column: foreignKeyColumn, Op: OpEq, Value: parent.GetID()},
 		OrderBys:  orderBys,
 	})
@@ -69,14 +75,15 @@ func LoadHasManyOnItem[
 	return children, nil
 }
 
-// LoadHasManyQueryOptsOnItem - LoadHasManyQueryOpts for a single parent item.
-// Merges queryOpts.WhereCond (if any) with the foreignKey=parent.ID predicate.
+// LoadDBModelHasManyQueryOptsOnItem - LoadDBModelHasManyQueryOpts for a single
+// parent item. Merges queryOpts.WhereCond (if any) with the
+// foreignKey=parent.ID predicate.
 // Writes the children collection to *relationFieldPtr(parent) and returns it.
-func LoadHasManyQueryOptsOnItem[
+func LoadDBModelHasManyQueryOptsOnItem[
 	PP model.Identifiable[PID],
 	PID comparable,
 	C any,
-	CP ScannableIdentifiable[C, CID],
+	CP IdentifiableDBModel[C, CID],
 	CID comparable,
 ](
 	ctx context.Context,
@@ -91,7 +98,7 @@ func LoadHasManyQueryOptsOnItem[
 	if queryOpts.WhereCond != nil {
 		cond = And{Conds: []Cond{cond, queryOpts.WhereCond}}
 	}
-	children, err := QueryCollection[C, CP, CID](ctx, db, sqlSelectBase, QueryOpts{
+	children, err := QueryDBModelCollection[C, CP, CID](ctx, db, sqlSelectBase, QueryOpts{
 		WhereCond: cond,
 		OrderBys:  queryOpts.OrderBys,
 	})
@@ -102,12 +109,13 @@ func LoadHasManyQueryOptsOnItem[
 	return children, nil
 }
 
-// LoadBelongsToOnItemWithStoreKey wraps LoadBelongsToOnItem with a RawSQLStore key lookup.
-func LoadBelongsToOnItemWithStoreKey[
+// LoadDBModelBelongsToOnItemWithStoreKey wraps LoadDBModelBelongsToOnItem
+// with a RawSQLStore key lookup.
+func LoadDBModelBelongsToOnItemWithStoreKey[
 	CP model.Identifiable[CID],
 	CID comparable,
 	P any,
-	PP ScannableIdentifiable[P, PID],
+	PP IdentifiableDBModel[P, PID],
 	PID comparable,
 ](
 	ctx context.Context,
@@ -116,20 +124,22 @@ func LoadBelongsToOnItemWithStoreKey[
 	storeKey string,
 	foreignKey func(c CP) PID,
 	relationFieldPtr func(c CP) *PP,
-) (*P, error) {
+) (PP, error) {
 	sqlBase, ok := db.MainRawSQLStore().Get(storeKey)
 	if !ok {
-		return nil, errs.SQLNotFoundInStore.WithDetail(storeKey)
+		var zero PP
+		return zero, errs.SQLNotFoundInStore.WithDetail(storeKey)
 	}
-	return LoadBelongsToOnItem[CP, CID, P, PP, PID](ctx, db, child, sqlBase, foreignKey, relationFieldPtr)
+	return LoadDBModelBelongsToOnItem[CP, CID, P, PP, PID](ctx, db, child, sqlBase, foreignKey, relationFieldPtr)
 }
 
-// LoadHasManyOnItemWithStoreKey wraps LoadHasManyOnItem with a RawSQLStore key lookup and FK column name.
-func LoadHasManyOnItemWithStoreKey[
+// LoadDBModelHasManyOnItemWithStoreKey wraps LoadDBModelHasManyOnItem with a
+// RawSQLStore key lookup and FK column name.
+func LoadDBModelHasManyOnItemWithStoreKey[
 	PP model.Identifiable[PID],
 	PID comparable,
 	C any,
-	CP ScannableIdentifiable[C, CID],
+	CP IdentifiableDBModel[C, CID],
 	CID comparable,
 ](
 	ctx context.Context,
@@ -148,15 +158,17 @@ func LoadHasManyOnItemWithStoreKey[
 	if err != nil {
 		return nil, fmt.Errorf("invalid foreign key column name %q", fkColumnName)
 	}
-	return LoadHasManyOnItem[PP, PID, C, CP, CID](ctx, db, parent, sqlBase, fkCol, relationFieldPtr, orderBys...)
+	return LoadDBModelHasManyOnItem[PP, PID, C, CP, CID](ctx, db, parent, sqlBase, fkCol, relationFieldPtr, orderBys...)
 }
 
-// LoadHasManyQueryOptsOnItemWithStoreKey wraps LoadHasManyQueryOptsOnItem with a RawSQLStore key lookup and FK column name.
-func LoadHasManyQueryOptsOnItemWithStoreKey[
+// LoadDBModelHasManyQueryOptsOnItemWithStoreKey wraps
+// LoadDBModelHasManyQueryOptsOnItem with a RawSQLStore key lookup and FK
+// column name.
+func LoadDBModelHasManyQueryOptsOnItemWithStoreKey[
 	PP model.Identifiable[PID],
 	PID comparable,
 	C any,
-	CP ScannableIdentifiable[C, CID],
+	CP IdentifiableDBModel[C, CID],
 	CID comparable,
 ](
 	ctx context.Context,
@@ -175,5 +187,5 @@ func LoadHasManyQueryOptsOnItemWithStoreKey[
 	if err != nil {
 		return nil, fmt.Errorf("invalid foreign key column name %q", fkColumnName)
 	}
-	return LoadHasManyQueryOptsOnItem[PP, PID, C, CP, CID](ctx, db, parent, sqlBase, fkCol, relationFieldPtr, queryOpts)
+	return LoadDBModelHasManyQueryOptsOnItem[PP, PID, C, CP, CID](ctx, db, parent, sqlBase, fkCol, relationFieldPtr, queryOpts)
 }

@@ -3,6 +3,8 @@ package cookie
 import (
 	"fmt"
 	"strings"
+
+	"github.com/x64c/gwf/gw/security"
 )
 
 type ExpireMode string
@@ -13,15 +15,25 @@ const (
 )
 
 // SessionConf is the cookie session configuration with optional per-shape sub-confs.
-// Each shape's sub-conf is nil if the app doesn't use that shape.
+// Each shape's sub-conf is nil if the app doesn't use that shape. One keyring
+// serves both shapes: each shape's cipher is HKDF-derived from it under its
+// own purpose label, so the two are cryptographically distinct.
 type SessionConf struct {
+	Keyring          *security.KeyringConf
 	UserSession      *UserSessionConf
 	AnonymousSession *AnonymousSessionConf
 }
 
+// HKDF purpose labels the cookie ciphers are derived under — distinct from
+// every other purpose even when keyring master keys are shared or reused
+// across config sections.
+const (
+	UserCookieCipherPurpose      = "user-cookie"
+	AnonymousCookieCipherPurpose = "anonymous-cookie"
+)
+
 // UserSessionConf is the cookie session config for the user-bound shape (logged-in users).
 type UserSessionConf struct {
-	EncryptionKey      string     `json:"enckey"`
 	ExpireIn           int        `json:"expire_in"` // seconds
 	ExpireMode         ExpireMode `json:"expire_mode"`
 	ExtendThreshold    int        `json:"extend_threshold"` // seconds; for sliding
@@ -32,7 +44,6 @@ type UserSessionConf struct {
 // AnonymousSessionConf is the cookie session config for the anonymous shape —
 // sessions for visitors not logged in (cart, A/B bucket, view tracker, etc.).
 type AnonymousSessionConf struct {
-	EncryptionKey   string     `json:"enckey"`
 	ExpireIn        int        `json:"expire_in"` // seconds
 	ExpireMode      ExpireMode `json:"expire_mode"`
 	ExtendThreshold int        `json:"extend_threshold"` // seconds; for sliding
@@ -59,8 +70,8 @@ func validateExpiry(label string, expireIn int, mode ExpireMode, extendThreshold
 
 // Validate reports the first invalid field in the user-shape config, so a
 // misconfigured .web-cookie-session.json fails loudly at startup rather than
-// surfacing as obscure runtime behavior. EncryptionKey is validated separately
-// during cipher construction (base64 decode + 32-byte length check).
+// surfacing as obscure runtime behavior. The keyring is validated separately
+// during cipher construction.
 func (c *UserSessionConf) Validate() error {
 	if err := validateExpiry("user cookie session", c.ExpireIn, c.ExpireMode, c.ExtendThreshold); err != nil {
 		return err

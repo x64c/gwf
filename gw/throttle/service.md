@@ -8,6 +8,9 @@ This service consists of 2 things:
 
 1. **Throttle bucket system** — `groups` map + `Allow()`/`GetBucket()`/
    `SetBucketGroup()`/`Inspect()`. The data and the request-path API.
+   `Allow` creates a bucket on first sight of an id, atomically
+   (`LoadOrStore`), so concurrent first requests share one bucket rather
+   than each getting a full burst.
 2. **Background cleanup service** — a goroutine that periodically prunes
    stale buckets.
 
@@ -21,12 +24,12 @@ the lifetime of the process.
 - Constructs the Service (`NewService`) with the given cleanup-cycle and
   idle-bucket-expiry config.
 - Initialises the `groups map[string]*BucketGroup` (empty).
-- Registers the Service with `Core.AddService` so the lifecycle loop
-  manages it.
+- Registers the Service with `Core.RegisterService`, which places it in the
+  composition graph the start and terminate walks follow.
 
 After `Prepare`, the app registers concrete bucket groups via
 `SetBucketGroup(id, conf)` — this *must* happen before `Start` (Start
-enforces it: `SetBucketGroup` after `Start` panics).
+enforces it: `SetBucketGroup` after `Start` calls `log.Fatalf`).
 
 Everything from this section is independent of `Start`/`Stop`/`Terminate`
 state. The configuration and the empty data structures are in place from
@@ -72,7 +75,21 @@ by GC at process exit.
 
 ## Operator note
 
-"Stop throttle" ≠ "disable throttling." Stop only pauses background
-cleanup; the request-path filter remains active. To truly disable rate
-limiting, the middleware itself would need to short-circuit based on
-service state — that is not the current contract.
+"Stop throttle" ≠ "pause the limiter." Stop halts background cleanup, and
+the data plane keeps its buckets — but `Allow` opens with
+`state != RUNNING → return true`, so a stopped service **admits
+everything**. Stopping it does not preserve the limit; it removes it.
+
+That fail-open verdict is a defect, not a feature: `Allow` returns a bare
+`bool`, which cannot express "I cannot evaluate this", so it answers
+wrongly by construction whichever way it picks. The fix is for callers to
+be gated in front of the service rather than for the service to judge its
+own availability — see the handle-acquisition question in
+`Framework Service Composition Graph` §11.1. Until that lands, treat
+`svc stop throttle` as disabling rate limiting.
+
+## Guarantee scope: one process
+
+Buckets are held in this process's memory, so the enforced rate is per
+process: N processes of one application admit N times the configured rate.
+See the framework README, "Concurrency and Deployment".

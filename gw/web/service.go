@@ -189,9 +189,9 @@ func (s *Service) run() {
 		if err := s.Server.Shutdown(gracefulCtx); err != nil {
 			log.Printf("[ERROR][HTTPServer] shutdown failed: %v", err)
 		}
-		<-serverErr // wait for ListenAndServe goroutine to return
+		<-serverErr // wait for the Serve goroutine to return
 	case err := <-serverErr:
-		// server died on its own (port conflict, internal error)
+		// server died on its own (serving error; a port conflict would have failed Start)
 		if err != nil {
 			log.Printf("[ERROR][HTTPServer] %v", err)
 		}

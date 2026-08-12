@@ -146,13 +146,13 @@ func (m *SessionManager) CreateSession(
 		"rth": refreshHash,
 		"rcs": strconv.FormatInt(now, 10),
 	}
-	if err := m.KVDB.SetFieldsWithTTL(ctx, m.SessionRowKey(sessionID), umbrellaFields, refreshTTL); err != nil {
+	if err := m.KVDB.HashSetFieldsWithKeyTTL(ctx, m.SessionRowKey(sessionID), umbrellaFields, refreshTTL); err != nil {
 		return "", "", "", err
 	}
-	if err := m.KVDB.Set(ctx, m.AccessTokenRowKey(accessHash), sessionID, accessTTL); err != nil {
+	if err := m.KVDB.ValueSet(ctx, m.AccessTokenRowKey(accessHash), sessionID, accessTTL); err != nil {
 		return "", "", "", err
 	}
-	if err := m.KVDB.Set(ctx, m.RefreshTokenRowKey(refreshHash), sessionID, refreshTTL); err != nil {
+	if err := m.KVDB.ValueSet(ctx, m.RefreshTokenRowKey(refreshHash), sessionID, refreshTTL); err != nil {
 		return "", "", "", err
 	}
 
@@ -167,7 +167,7 @@ func (m *SessionManager) CreateSession(
 		entry.Lock()
 		defer entry.Unlock()
 
-		if err := m.KVDB.Push(ctx, bucketKey, sessionID); err != nil {
+		if err := m.KVDB.ListPush(ctx, bucketKey, sessionID); err != nil {
 			return "", "", "", err
 		}
 		defer func() {
@@ -222,7 +222,7 @@ func (m *SessionManager) DestroySession(ctx context.Context, sid string) error {
 		entry.Lock()
 		defer entry.Unlock()
 
-		_, _ = m.KVDB.Remove(ctx, bucketKey, 0, sid)
+		_, _ = m.KVDB.ListRemove(ctx, bucketKey, 0, sid)
 	}
 
 	_, _ = m.KVDB.Delete(ctx, keysToDelete...)
@@ -233,7 +233,7 @@ func (m *SessionManager) DestroySession(ctx context.Context, sid string) error {
 // Returns (nil, nil) if the row doesn't exist (session expired or never existed).
 // UID may be empty (userless flow); ClientID may be empty (clientless flow).
 func (m *SessionManager) FetchSession(ctx context.Context, sessionID string) (*SessionRow, error) {
-	fields, err := m.KVDB.GetFields(ctx, m.SessionRowKey(sessionID), "uid", "cid", "grp", "ath", "rth", "rcs")
+	fields, err := m.KVDB.HashGetFields(ctx, m.SessionRowKey(sessionID), "uid", "cid", "grp", "ath", "rth", "rcs")
 	if err != nil {
 		return nil, err
 	}
@@ -257,7 +257,7 @@ func (m *SessionManager) FetchSession(ctx context.Context, sessionID string) (*S
 // row is missing (evicted/expired).
 func (m *SessionManager) FetchSessionByAccessToken(ctx context.Context, rawToken string) (*SessionRow, error) {
 	hash := security.HashHexSHA256(rawToken)
-	sid, found, err := m.KVDB.Get(ctx, m.AccessTokenRowKey(hash))
+	sid, found, err := m.KVDB.ValueGet(ctx, m.AccessTokenRowKey(hash))
 	if err != nil {
 		return nil, err
 	}
@@ -273,7 +273,7 @@ func (m *SessionManager) FetchSessionByAccessToken(ctx context.Context, rawToken
 // row is missing (evicted/expired).
 func (m *SessionManager) FetchSessionByRefreshToken(ctx context.Context, rawToken string) (*SessionRow, error) {
 	hash := security.HashHexSHA256(rawToken)
-	sid, found, err := m.KVDB.Get(ctx, m.RefreshTokenRowKey(hash))
+	sid, found, err := m.KVDB.ValueGet(ctx, m.RefreshTokenRowKey(hash))
 	if err != nil {
 		return nil, err
 	}
@@ -292,7 +292,7 @@ func (m *SessionManager) ExtendSession(ctx context.Context, refreshToken string)
 
 	// STEP 1: resolve refresh token → sid + umbrella row + group conf
 	refreshHash := security.HashHexSHA256(refreshToken)
-	sid, found, err := m.KVDB.Get(ctx, m.RefreshTokenRowKey(refreshHash))
+	sid, found, err := m.KVDB.ValueGet(ctx, m.RefreshTokenRowKey(refreshHash))
 	if err != nil {
 		return "", "", errs.KVDB.WithDetail("fetching refresh token row").WithCause(err)
 	}
@@ -305,7 +305,9 @@ func (m *SessionManager) ExtendSession(ctx context.Context, refreshToken string)
 		return "", "", errs.KVDB.WithDetail("fetching session row").WithCause(err)
 	}
 	if row == nil {
-		return "", "", errs.RefreshTokenNotFound // token row points to gone umbrella
+		// The token resolved, so the credential is not the problem — the
+		// container it points at has ended.
+		return "", "", errs.BearerSessionNotFound
 	}
 
 	clientConf, ok := m.ClientConfs[row.ClientID]
@@ -334,20 +336,36 @@ func (m *SessionManager) ExtendSession(ctx context.Context, refreshToken string)
 	// STEP 4: write new access + refresh token rows (pointers to sid)
 	accessTTL := time.Duration(group.AccessTTL) * time.Second
 	refreshTTL := time.Duration(group.RefreshTTL) * time.Second
-	if err := m.KVDB.Set(ctx, m.AccessTokenRowKey(newAccessHash), sid, accessTTL); err != nil {
+	if err := m.KVDB.ValueSet(ctx, m.AccessTokenRowKey(newAccessHash), sid, accessTTL); err != nil {
 		return "", "", errs.KVDB.WithDetail("writing new access token row").WithCause(err)
 	}
-	if err := m.KVDB.Set(ctx, m.RefreshTokenRowKey(newRefreshHash), sid, refreshTTL); err != nil {
+	if err := m.KVDB.ValueSet(ctx, m.RefreshTokenRowKey(newRefreshHash), sid, refreshTTL); err != nil {
 		return "", "", errs.KVDB.WithDetail("writing new refresh token row").WithCause(err)
 	}
 
-	// STEP 5: update umbrella row's ath/rth fields + extend its TTL to refreshTTL
+	// STEP 5: update umbrella row's ath/rth fields + extend its TTL to refreshTTL.
+	//
+	// Conditional, because STEP 1 established the row exists and this write is
+	// two round trips later. An unconditional write would RECREATE a row that
+	// expired in between — carrying only ath/rth, no uid/cid/grp/rcs, on a full
+	// fresh lifetime — and FetchSession would then hand that back as a session
+	// with an empty principal.
 	umbrellaFields := map[string]any{
 		"ath": newAccessHash,
 		"rth": newRefreshHash,
 	}
-	if err := m.KVDB.SetFieldsWithTTL(ctx, m.SessionRowKey(sid), umbrellaFields, refreshTTL); err != nil {
+	existed, err := m.KVDB.HashSetFieldsWithKeyTTLIfExists(ctx, m.SessionRowKey(sid), umbrellaFields, refreshTTL)
+	if err != nil {
 		return "", "", errs.KVDB.WithDetail("updating umbrella row").WithCause(err)
+	}
+	if !existed {
+		// The session ended mid-rotation. STEP 4's token rows now point at
+		// nothing, so drop them rather than leave them to time out.
+		_, _ = m.KVDB.Delete(ctx,
+			m.AccessTokenRowKey(newAccessHash),
+			m.RefreshTokenRowKey(newRefreshHash),
+		)
+		return "", "", errs.BearerSessionNotFound
 	}
 
 	// STEP 6: delete old access + refresh token rows (cleanup); slide cap list TTL
@@ -388,7 +406,7 @@ func (m *SessionManager) ExtendSession(ctx context.Context, refreshToken string)
 // Redis TTL reclaims their memory naturally; doing it explicitly would cost an
 // extra HMGET + 2 deletes per evicted session for no functional benefit.
 func (m *SessionManager) enforceSessionCap(ctx context.Context, bucketKey string, capMax int) error {
-	sessionCnt, err := m.KVDB.Len(ctx, bucketKey)
+	sessionCnt, err := m.KVDB.ListLen(ctx, bucketKey)
 	if err != nil {
 		return err
 	}
@@ -397,7 +415,7 @@ func (m *SessionManager) enforceSessionCap(ctx context.Context, bucketKey string
 	}
 
 	diff := sessionCnt - int64(capMax)
-	sessionsToDel, err := m.KVDB.Range(ctx, bucketKey, 0, diff-1)
+	sessionsToDel, err := m.KVDB.ListRange(ctx, bucketKey, 0, diff-1)
 	if err != nil {
 		return err
 	}
@@ -406,7 +424,7 @@ func (m *SessionManager) enforceSessionCap(ctx context.Context, bucketKey string
 		keysToDel = append(keysToDel, m.SessionRowKey(sid))
 	}
 	_, _ = m.KVDB.Delete(ctx, keysToDel...)
-	if err = m.KVDB.Trim(ctx, bucketKey, diff, -1); err != nil {
+	if err = m.KVDB.ListTrim(ctx, bucketKey, diff, -1); err != nil {
 		return err
 	}
 	return nil

@@ -9,61 +9,52 @@ import (
 	"github.com/x64c/gwf/gw/errs"
 )
 
-// QueryFirst queries a single model using QueryOpts with LIMIT 1.
-// Returns the item or ErrNoRows if not found.
+// The DBModel query functions. sqlSelectBase must be clean of WHERE and
+// bindings, and its column order must match the model's binding order.
+
+// QueryDBModelFirst queries a single instance using QueryOpts with LIMIT 1.
+// Returns the instance or ErrNoRows if none matched.
 // QueryOpts.Limit must be 0 (omitted) or 1; greater than 1 returns an error.
-func QueryFirst[
-	M any, // Model struct
-	MP Scannable[M], // *Model implementing Scannable[M]
-](
+func QueryDBModelFirst[M any, MP DBModel[M]](
 	ctx context.Context,
 	db DB,
-	sqlSelectBase string, // must be clean from WHERE and bindings
+	sqlSelectBase string,
 	queryOpts QueryOpts,
-) (*M, error) {
+) (MP, error) {
 	if queryOpts.Limit > 1 {
-		return nil, errs.SQLDB.WithDetail("QueryFirst does not accept Limit greater than 1")
+		var zero MP
+		return zero, errs.SQLDB.WithDetail("QueryDBModelFirst does not accept Limit greater than 1")
 	}
 	whereSQL, args := WhereClause{queryOpts.WhereCond}.Build(db.Client(), 1)
 	sqlStmt := sqlSelectBase + whereSQL + OrderByClause(queryOpts.OrderBys) + LimitClause(1)
-	return RawQueryItem[M, MP](ctx, db, sqlStmt, args...)
+	return RawQueryDBModel[M, MP](ctx, db, sqlStmt, args...)
 }
 
-// QueryCollection queries models into a collection using QueryOpts.
-// Builds a standalone clause from QueryOpts, starting with WHERE if any conditions exist.
-func QueryCollection[
-	M any, // Model struct
-	MP ScannableIdentifiable[M, ID], // *Model implementing ScannableIdentifiable[M, ID]
-	ID comparable,
-](
+// QueryDBModelCollection queries instances into a collection using QueryOpts.
+func QueryDBModelCollection[M any, MP IdentifiableDBModel[M, ID], ID comparable](
 	ctx context.Context,
 	db DB,
-	sqlSelectBase string, // must be clean from WHERE and bindings
+	sqlSelectBase string,
 	queryOpts QueryOpts,
 ) (*coll.Collection[MP, ID], error) {
 	whereSQL, args := WhereClause{queryOpts.WhereCond}.Build(db.Client(), 1)
 	sqlStmt := sqlSelectBase + whereSQL + OrderByClause(queryOpts.OrderBys) + LimitClause(queryOpts.Limit)
-	return RawQueryCollection[M, MP, ID](ctx, db, sqlStmt, args...)
+	return RawQueryDBModelCollection[M, MP, ID](ctx, db, sqlStmt, args...)
 }
 
-// QueryCollectionByColumn queries models where a column matches one or more values.
-// Uses WHERE column = ? for single value, WHERE column IN (?, ...) for multiple.
-// Returns a collection of scanned models.
-func QueryCollectionByColumn[
-	M any, // Model struct
-	MP ScannableIdentifiable[M, ID], // *Model implementing ScannableIdentifiable[M, ID]
-	ID comparable,
-	V any,
-](
+// QueryDBModelCollectionByColumn queries instances where a column matches one
+// or more values: WHERE column = ? for a single value, WHERE column IN (?, ...)
+// for several.
+func QueryDBModelCollectionByColumn[M any, MP IdentifiableDBModel[M, ID], ID comparable, V any](
 	ctx context.Context,
 	db DB,
-	sqlSelectBase string, // must be clean from WHERE and bindings
+	sqlSelectBase string,
 	column Column,
 	values []V,
 	orderBys ...OrderBy,
 ) (*coll.Collection[MP, ID], error) {
 	if len(values) == 0 {
-		return nil, errs.SQLDB.WithDetail("QueryCollectionByColumn requires at least one value")
+		return nil, errs.SQLDB.WithDetail("QueryDBModelCollectionByColumn requires at least one value")
 	}
 	dbClient := db.Client()
 	var (
@@ -91,5 +82,5 @@ func QueryCollectionByColumn[
 			log.Printf("rows.Close() failed: %v", err)
 		}
 	}()
-	return ScanRowsToCollection[M, MP, ID](rows)
+	return ScanRowsToDBModelCollection[M, MP, ID](rows)
 }

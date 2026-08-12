@@ -16,7 +16,15 @@ import (
 
 type CookieUserSession[UID comparable] struct {
 	AppProvider framework.AppProviderFunc
-	ParseUID    func(string) (UID, error)
+	// ParseUID converts the stored identity into the app's UID type. What is
+	// stored is always a string — that is what a KVDB holds — so this is where
+	// a string becomes an identity.
+	//
+	// It MUST return an error for any string that does not name one, the empty
+	// string included. Nothing else can make that judgement: only the app knows
+	// what its UID type admits, and a ParseUID that accepts "" turns a session
+	// carrying no identity into an authenticated principal.
+	ParseUID func(string) (UID, error)
 }
 
 func (m *CookieUserSession[UID]) Wrap(inner http.Handler) http.Handler {
@@ -64,7 +72,7 @@ func (m *CookieUserSession[UID]) authenticateCookieSession(
 		http.Redirect(w, r, mgr.Conf.UserSession.LoginPath+"?endpoint=protected", http.StatusSeeOther)
 		return nil, nil, "", "", false
 	}
-	sessionIDBytes, err := mgr.UserCookieCipher.DecodeDecrypt(sessionCookie.Value)
+	sessionIDBytes, err := mgr.UserCookieCipher.DecodeDecrypt(sessionCookie.Value, mgr.UserCookieCipherContext())
 	if err != nil {
 		responses.WriteSimpleErrorJSON(w, http.StatusUnauthorized, fmt.Sprintf("invalid session. %v", err))
 		return nil, nil, "", "", false

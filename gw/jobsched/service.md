@@ -21,8 +21,8 @@ the lifetime of the process.
 `Core.PrepareJobSchedulerService()`:
 - Constructs the Service (`NewService`).
 - Initialises empty `oneTimeJobs` and `cronJobs` maps.
-- Registers the Service with `Core.AddService` so the lifecycle loop
-  manages it.
+- Registers the Service with `Core.RegisterService`, which places it in the
+  composition graph the start and terminate walks follow.
 
 After `Prepare`:
 - The app may call `UseDefaultLoggers()` to wire default logging callbacks
@@ -99,3 +99,10 @@ with many registered one-time jobs accumulates indefinitely.
 Cron jobs behave differently: each tick walks all cron entries and asks
 `job.Matches(now)`, so cron jobs simply skip occurrences that fell during
 the pause and resume firing on the next matching minute after Start.
+
+## Guarantee scope: one process
+
+The schedule and fired-occurrence state are held in this process's memory,
+and no inter-process coordination exists: N processes of one application fire
+each job N times, against shared data. This path is not request-driven. See
+the framework README, "Concurrency and Deployment".

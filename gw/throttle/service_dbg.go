@@ -12,9 +12,7 @@ func (s *Service) Cleanup(now time.Time) {
 	cleanCnt := 0
 	for gid, g := range s.groups {
 		log.Printf("[DEBUG][Throttle] cleaning BucketGroup %q", gid)
-		g.buckets.Range(func(id, value any) bool {
-			b := value.(*Bucket)
-
+		g.buckets.rangeAll(func(id string, b *Bucket) bool {
 			// lock per bucket while checking/removing
 			b.mu.Lock()
 			last := b.lastCheck
@@ -22,7 +20,7 @@ func (s *Service) Cleanup(now time.Time) {
 			b.mu.Unlock()
 
 			if now.Sub(last) > s.cleanupOlderThan {
-				g.buckets.Delete(id)
+				g.buckets.remove(id)
 				cleanCnt++
 				log.Println("[DEBUG][Throttle] Bucket REMOVED")
 			} else {
