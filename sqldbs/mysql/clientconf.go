@@ -10,6 +10,14 @@ type ClientConf struct {
 	Params map[string]string `json:"params"` // extra DSN parameters — MySQL's own knobs, see below
 	DSN    string            `json:"dsn"`    // To overwrite default DSN building — bypasses Params too
 	Pool   *PoolConf         `json:"pool"`   // REQUIRED — see PoolConf
+
+	// InitTimeoutSecs is the deadline for EACH database's whole
+	// initialization in CreateDB: connect + ping + the schema snapshot.
+	// REQUIRED (seconds > 0). A tolerance judgment only the deployment can
+	// make — a local socket may want fail-fast, a managed server resuming
+	// from cold or a large schema over a slow link may need far more. Unset,
+	// the framework used to hardcode 5 seconds.
+	InitTimeoutSecs int `json:"init_timeout_secs"`
 }
 
 // Params are appended to the generated DSN verbatim, sorted by key so one conf

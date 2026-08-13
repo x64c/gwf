@@ -33,6 +33,9 @@ func NewClient(conf ClientConf) (*Client, error) {
 	if err := conf.Pool.validate(); err != nil {
 		return nil, err
 	}
+	if conf.InitTimeoutSecs <= 0 {
+		return nil, fmt.Errorf("mysql: init_timeout_secs must be set (seconds > 0): got %d — the framework used to hardcode 5 seconds; the deployment states its tolerance", conf.InitTimeoutSecs)
+	}
 	return &Client{
 		conf:   conf,
 		stores: make(map[string]*sqldbs.RawSQLStore),
@@ -77,7 +80,7 @@ func (c *Client) CreateDB(name string, rawConf jsontext.Value) error {
 	conn.SetMaxOpenConns(*c.conf.Pool.MaxOpenConns)
 	conn.SetMaxIdleConns(*c.conf.Pool.MaxIdleConns)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.conf.InitTimeoutSecs)*time.Second)
 	defer cancel()
 	if err = conn.PingContext(ctx); err != nil {
 		_ = conn.Close()

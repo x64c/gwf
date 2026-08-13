@@ -35,6 +35,9 @@ func NewClient(conf ClientConf) (*Client, error) {
 	if err := validateDSNCarriesNoPoolParams(conf.DSN); err != nil {
 		return nil, err
 	}
+	if conf.InitTimeoutSecs <= 0 {
+		return nil, fmt.Errorf("pgsql: init_timeout_secs must be set (seconds > 0): got %d — the framework used to hardcode 5 seconds; the deployment states its tolerance", conf.InitTimeoutSecs)
+	}
 	return &Client{
 		conf:   conf,
 		stores: make(map[string]*sqldbs.RawSQLStore),
@@ -77,7 +80,7 @@ func (c *Client) CreateDB(name string, rawConf jsontext.Value) error {
 	config.MaxConnLifetime = time.Duration(*c.conf.Pool.ConnMaxLifetimeSecs) * time.Second
 	config.MaxConnIdleTime = time.Duration(*c.conf.Pool.ConnMaxIdleTimeSecs) * time.Second
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.conf.InitTimeoutSecs)*time.Second)
 	defer cancel()
 
 	pool, err := pgxpool.NewWithConfig(ctx, config)
