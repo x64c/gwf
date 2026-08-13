@@ -300,6 +300,21 @@ func (m *SessionManager) ExtendSession(ctx context.Context, refreshToken string)
 		return "", "", errs.RefreshTokenNotFound
 	}
 
+	// One rotation at a time per session. STEP 2's anti-replay check and the
+	// STEP 5 write that retires the token it checked are three KVDB round
+	// trips apart; unguarded, concurrent presentations of ONE refresh token
+	// all read the pre-rotation row, all pass, and all rotate — so the reuse
+	// detection below would catch only SEQUENTIAL replay. The umbrella row is
+	// fetched inside the guard, because a row read before it can be stale by
+	// the time the check runs, which is the same defect wearing a lock.
+	//
+	// Keyed by the session row, as the cap-enforcement locks are keyed by
+	// their bucket row. DestroySession takes only a bucket lock, so the
+	// replay branch below cannot deadlock against this one.
+	locker := m.SessionLocks.Acquire(m.SessionRowKey(sid))
+	locker.Lock()
+	defer locker.Unlock()
+
 	row, err := m.FetchSession(ctx, sid)
 	if err != nil {
 		return "", "", errs.KVDB.WithDetail("fetching session row").WithCause(err)
@@ -323,7 +338,16 @@ func (m *SessionManager) ExtendSession(ctx context.Context, refreshToken string)
 		return "", "", errs.InvalidRefreshToken.WithDetail("refresh chain ttl exceeded")
 	}
 	if refreshHash != row.RefreshTokenHash {
-		_ = m.DestroySession(ctx, sid) // RFC 6819: stale token = suspect compromise
+		// A replayed (already-rotated) token is rejected, and nothing more.
+		// Deliberately NOT RFC 6819's destroy-the-chain response: this signal
+		// cannot distinguish a thief from the victim from an honest retry
+		// after a lost response, so automatic destruction becomes a
+		// thief-plays-victim DoS — anyone holding a retired token could log
+		// the legitimate user out at will — and a session kill for a network
+		// glitch. Rotation already makes a refresh token one-shot; the chain
+		// hardcap above bounds any stolen chain's lifetime. Recovery from
+		// actual theft belongs to the account owner — re-login and session
+		// revocation — where thief and victim CAN be told apart.
 		return "", "", errs.InvalidRefreshToken.WithDetail("refresh token mismatch")
 	}
 

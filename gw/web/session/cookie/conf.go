@@ -9,6 +9,38 @@ import (
 
 type ExpireMode string
 
+// The two expiry policies are alternatives, chosen per shape: ExpireAbsolute
+// sets the session's TTL once at creation — it ends ExpireIn seconds later
+// regardless of activity — while ExpireSliding extends the TTL on activity
+// (see ExtendThreshold), so a session in regular use stays alive and only an
+// idle gap of ExpireIn seconds ends it.
+//
+// There is deliberately no third policy stacking an absolute TTL on top of
+// sliding. Sliding's contract is "activity buys a full ExpireIn from now";
+// under an absolute TTL, the last extension can only deliver whatever remains
+// of it — an arbitrarily short stub, handed out silently. Cookie
+// sessions carry a human at a browser, and that hybrid fires on exactly the
+// most regular users: today's visit looks like every other visit, the
+// extension appears to fire, and the session ends minutes in with no visible
+// reason. A deployment that wants hard-scheduled logout chooses
+// absolute; one that wants activity-based lifetime chooses sliding and bounds
+// it with the idle timeout. (Bearer's refresh_chain_ttl caps a machine
+// credential — the API client re-authenticates programmatically and no human
+// sees it. The asymmetry is per principal type, and intentional.)
+//
+//	simple absolute — ok:
+//	|start-------------------absttl------------------ends|
+//
+//	sliding with absttl — the rejected hybrid:
+//	|start---------|.............absttl..............|
+//	          |ext---------|
+//	                     |ext----------|
+//	                                |ext-----------|
+//	                                              |--|  ← today's "extension"
+//	                                                      is a stub: kicked out
+//	                                                      after a very short
+//	                                                      period of normal
+//	                                                      daily use
 const (
 	ExpireAbsolute ExpireMode = "absolute"
 	ExpireSliding  ExpireMode = "sliding"

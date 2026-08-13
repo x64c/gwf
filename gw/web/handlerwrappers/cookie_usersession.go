@@ -24,6 +24,16 @@ type CookieUserSession[UID comparable] struct {
 	// string included. Nothing else can make that judgement: only the app knows
 	// what its UID type admits, and a ParseUID that accepts "" turns a session
 	// carrying no identity into an authenticated principal.
+	//
+	// The middleware deliberately does NOT pre-check "" before calling this.
+	// ParseUID must already reject it — apps call ParseUID from their own
+	// sites too, so it can never assume a sanitized caller — and a
+	// middleware-side guard would therefore be a second check of the same
+	// string on every authenticated request, while teaching parser authors
+	// that someone else handles the empty case. There is one judge, it is
+	// this function, and its contract is total. (A parse failure is answered
+	// as an invalid session — cookie cleared, redirect to login — never a
+	// bare error page; see authenticateCookieSession.)
 	ParseUID func(string) (UID, error)
 }
 
@@ -100,8 +110,16 @@ func (m *CookieUserSession[UID]) authenticateCookieSession(
 
 	uid, err := m.ParseUID(uidStr)
 	if err != nil {
-		responses.WriteErrorJSON(w, http.StatusInternalServerError, errs.KVDB.WithDetail("parse uid").WithCause(err))
-		return
+		// The row exists but its identity does not parse — a corrupt session,
+		// not a server fault. Answered like any other invalid session: end it
+		// (row + cookie) and send the human back to login. A bare error here
+		// would strand the browser in a loop — the cookie would re-present
+		// the same corrupt row on every request with no way back.
+		_ = mgr.DeleteUserSessionKVDB(ctx, sessionID)
+		mgr.DeleteUserSessionCookie(w)
+		cookie.SetIntendedURICookie(w, r, 60)
+		http.Redirect(w, r, mgr.Conf.UserSession.LoginPath+"?session=invalid", http.StatusSeeOther)
+		return nil, nil, "", "", false
 	}
 
 	ctx = cookie.WithUserSessionData(ctx, &cookie.UserSessionData[UID]{

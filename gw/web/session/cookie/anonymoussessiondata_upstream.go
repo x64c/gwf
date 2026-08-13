@@ -3,102 +3,81 @@ package cookie
 import (
 	"context"
 	"net/http"
+	"sync"
 
 	"github.com/x64c/gwf/gw/errs"
 	"github.com/x64c/gwf/gw/web/fwupstream"
 )
 
-// UpstreamAccessToken returns the upstream access token for clientID, fetching
-// it from KVDB on first call and caching the result for the rest of the
-// request. Concurrent calls for the same clientID share a single fetch.
-func (sd *AnonymousSessionData) UpstreamAccessToken(ctx context.Context, clientID string) (string, *errs.Error) {
-	slot, _ := sd.upATknSlots.LoadOrStore(clientID, &fwupstream.TknSlot{})
-	s := slot.(*fwupstream.TknSlot)
-	s.Once.Do(func() {
-		s.Val, s.Err = sd.Mgr.AnonymousFetchUpstreamAccessToken(ctx, sd.ID, clientID)
-	})
-	return s.Val, s.Err
+// The upstream request ladder lives once, in fwupstream, written against its
+// TokenRow constraint. The first five methods below are this shape's half of
+// that constraint — its identity, computed from what it already holds. The
+// rest is the published method surface, delegating to the shared ladder.
+
+// UpstreamHub reports which Hub owns this session's upstream tokens.
+func (sd *AnonymousSessionData) UpstreamHub() *fwupstream.Hub { return sd.Mgr.FWUpstream }
+
+// UpstreamRowKey returns the KVDB row key this session's upstream tokens are
+// stored on — the same row the session itself lives in.
+func (sd *AnonymousSessionData) UpstreamRowKey() string { return sd.Mgr.AnonymousSessionRowKey(sd.ID) }
+
+// UpstreamAccessSlots returns this request's cache of upstream access-token
+// reads.
+func (sd *AnonymousSessionData) UpstreamAccessSlots() *fwupstream.TknSlots { return &sd.upATknSlots }
+
+// UpstreamRefreshSlots returns this request's cache of upstream refresh-token
+// reads.
+func (sd *AnonymousSessionData) UpstreamRefreshSlots() *fwupstream.TknSlots { return &sd.upRTknSlots }
+
+// UpstreamRefreshLocker returns the per-row mutex guarding this session's
+// upstream refresh, from the store shared with session.Service. Keyed by the
+// row key — the same value UpstreamRowKey computes — so every request on this
+// session takes the same lock.
+func (sd *AnonymousSessionData) UpstreamRefreshLocker() sync.Locker {
+	return sd.Mgr.SessionLocks.Acquire(sd.Mgr.AnonymousSessionRowKey(sd.ID))
 }
 
-// UpstreamRefreshToken returns the upstream refresh token for clientID, fetching
-// it from KVDB on first call and caching the result for the rest of the
-// request. Concurrent calls for the same clientID share a single fetch.
-func (sd *AnonymousSessionData) UpstreamRefreshToken(ctx context.Context, clientID string) (string, *errs.Error) {
-	slot, _ := sd.upRTknSlots.LoadOrStore(clientID, &fwupstream.TknSlot{})
-	s := slot.(*fwupstream.TknSlot)
-	s.Once.Do(func() {
-		s.Val, s.Err = sd.Mgr.AnonymousFetchUpstreamRefreshToken(ctx, sd.ID, clientID)
-	})
-	return s.Val, s.Err
-}
-
-// UpstreamRequestWithBearer is the foundation method for sending a request with
-// an access token from the session. Returns the raw *http.Response (caller closes
-// body) on success. res.Body is io.ReadCloser — the byte stream; consume or pass through.
-func (sd *AnonymousSessionData) UpstreamRequestWithBearer(
-	ctx context.Context,
-	fwClient *fwupstream.Client,
-	method, endpoint string,
-	payload *fwupstream.RequestPayload,
-) (*http.Response, int, *errs.Error) {
-	accessTkn, resErr := sd.UpstreamAccessToken(ctx, fwClient.ID)
-	if resErr != nil {
-		return nil, http.StatusUnauthorized, resErr
-	}
-	return fwClient.RequestWithBearer(ctx, accessTkn, method, endpoint, payload)
-}
-
-// UpstreamRequestWithBearerRetriable calls UpstreamRequestWithBearer; on a
-// refresh-worthy auth failure (token missing locally, or upstream rejected it),
-// refreshes the token pair via fwClient.RequestRefreshAccessTknPair, updates
-// the session row + cached slots, and retries once.
-//
-// Refresh-request body extras come from the typed refresh sideloader registered
-// on the Client for this session-data type (via cookie.SetAnonymousRefreshSideloader).
-// If no sideloader is registered, returns UpstreamRefreshSideloaderNotSet.
-//
-// res.Body is io.ReadCloser — the byte stream; consume or pass through.
-func (sd *AnonymousSessionData) UpstreamRequestWithBearerRetriable(
-	ctx context.Context,
-	fwClient *fwupstream.Client,
-	method, endpoint string,
-	payload *fwupstream.RequestPayload,
-) (*http.Response, int, *errs.Error) {
-	res, status, resErr := sd.UpstreamRequestWithBearer(ctx, fwClient, method, endpoint, payload)
-	if resErr == nil {
-		return res, status, nil
-	}
-
-	shouldRefresh := resErr.IsSameCode(errs.UpstreamAccessTokenNotFound) ||
-		resErr.IsSameCode(errs.AccessTokenNotFound) ||
-		resErr.IsSameCode(errs.InvalidAccessToken)
-	if !shouldRefresh {
-		return nil, status, resErr
-	}
-
-	refreshTkn, resErr := sd.UpstreamRefreshToken(ctx, fwClient.ID)
-	if resErr != nil {
-		return nil, http.StatusUnauthorized, resErr
-	}
+// UpstreamRefreshExtras returns the extra body fields for the refresh request,
+// from the sideloader registered for this shape via
+// SetAnonymousRefreshSideloader.
+func (sd *AnonymousSessionData) UpstreamRefreshExtras(ctx context.Context, fwClient *fwupstream.Client) (map[string]any, *errs.Error) {
 	refreshSideloader, ok := GetAnonymousRefreshSideloader(fwClient)
 	if !ok {
-		return nil, http.StatusInternalServerError, errs.UpstreamRefreshSideloaderNotSet.WithDetail("Client " + fwClient.ID + " has no AnonymousRefreshSideloader")
+		return nil, errs.UpstreamRefreshSideloaderNotSet.WithDetail("Client " + fwClient.ID + " has no AnonymousRefreshSideloader")
 	}
 	// sd is this method's receiver — forwarded so the closure body never has to fetch session data from ctx.
-	refreshExtra := refreshSideloader(ctx, sd)
-	newPair, resErr := fwClient.RequestRefreshAccessTknPair(ctx, refreshTkn, refreshExtra)
-	if resErr != nil {
-		return nil, http.StatusUnauthorized, resErr
-	}
-	if resErr := sd.Mgr.AnonymousStoreUpstreamTokenPair(ctx, sd.ID, fwClient.ID, newPair.AccessToken, newPair.RefreshToken); resErr != nil {
-		return nil, http.StatusInternalServerError, resErr
-	}
+	return refreshSideloader(ctx, sd), nil
+}
 
-	// Update cached lazy slots so the retry picks up the new tokens.
-	sd.upATknSlots.Store(fwClient.ID, fwupstream.NewDoneTknSlot(newPair.AccessToken))
-	sd.upRTknSlots.Store(fwClient.ID, fwupstream.NewDoneTknSlot(newPair.RefreshToken))
+// UpstreamAccessToken returns the upstream access token for clientID, fetching
+// it from KVDB on first call and caching the result for the rest of the
+// request. See fwupstream.RowAccessToken.
+func (sd *AnonymousSessionData) UpstreamAccessToken(ctx context.Context, clientID string) (string, *errs.Error) {
+	return fwupstream.RowAccessToken(ctx, sd, clientID)
+}
 
-	return sd.UpstreamRequestWithBearer(ctx, fwClient, method, endpoint, payload)
+// UpstreamRefreshToken returns the upstream refresh token for clientID,
+// fetching it from KVDB on first call and caching the result for the rest of
+// the request. See fwupstream.RowRefreshToken.
+func (sd *AnonymousSessionData) UpstreamRefreshToken(ctx context.Context, clientID string) (string, *errs.Error) {
+	return fwupstream.RowRefreshToken(ctx, sd, clientID)
+}
+
+// UpstreamRequestWithBearer is the foundation method for sending a request
+// with an access token from the session. Returns the raw *http.Response
+// (caller closes body) on success. See fwupstream.RowRequestWithBearer.
+func (sd *AnonymousSessionData) UpstreamRequestWithBearer(ctx context.Context, fwClient *fwupstream.Client, method, endpoint string, payload *fwupstream.RequestPayload) (*http.Response, int, *errs.Error) {
+	return fwupstream.RowRequestWithBearer(ctx, sd, fwClient, method, endpoint, payload)
+}
+
+// UpstreamRequestWithBearerRetriable sends the request and, on a
+// refresh-worthy auth failure (token missing locally, or upstream rejected
+// it), refreshes the token pair, updates the session row + cached slots, and
+// retries once. Refresh-request body extras come from the sideloader
+// registered via SetAnonymousRefreshSideloader; without one, returns
+// UpstreamRefreshSideloaderNotSet. See fwupstream.RowRequestWithBearerRetriable.
+func (sd *AnonymousSessionData) UpstreamRequestWithBearerRetriable(ctx context.Context, fwClient *fwupstream.Client, method, endpoint string, payload *fwupstream.RequestPayload) (*http.Response, int, *errs.Error) {
+	return fwupstream.RowRequestWithBearerRetriable(ctx, sd, fwClient, method, endpoint, payload)
 }
 
 // UpstreamRequestJSON forces Accept: application/json and delegates to the

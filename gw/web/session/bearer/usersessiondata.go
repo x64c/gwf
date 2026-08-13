@@ -2,7 +2,8 @@ package bearer
 
 import (
 	"context"
-	"sync"
+
+	"github.com/x64c/gwf/gw/web/fwupstream"
 )
 
 // UserSessionData is the per-request bearer-session payload for user-bound
@@ -18,8 +19,8 @@ type UserSessionData[UID comparable] struct {
 	GroupName string          // session group name
 	Mgr       *SessionManager // back-ref to the process-scoped SessionManager
 
-	upATknSlots sync.Map // clientID → *fwupstream.TknSlot (cached upstream access token, lazy)
-	upRTknSlots sync.Map // clientID → *fwupstream.TknSlot (cached upstream refresh token, lazy)
+	upATknSlots fwupstream.TknSlots // cached upstream access-token reads, lazy, keyed by client id
+	upRTknSlots fwupstream.TknSlots // cached upstream refresh-token reads, lazy, keyed by client id
 }
 
 func (sd *UserSessionData[UID]) SessionID() string { return sd.ID }
