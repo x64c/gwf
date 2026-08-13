@@ -10,4 +10,4 @@ use (
 	./udscmds
 )
 
-replace github.com/x64c/gwf/gw v0.6.1 => ./gw
+replace github.com/x64c/gwf/gw v0.6.2 => ./gw
