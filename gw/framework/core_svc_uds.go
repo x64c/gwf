@@ -18,6 +18,9 @@ func (c *Core) PrepareUDSService(cmdStore *uds.CommandStore) error {
 	if err = json.Unmarshal(confBytes, &conf); err != nil {
 		return err
 	}
+	if err = conf.Validate(); err != nil {
+		return err
+	}
 	c.UDSService = uds.NewService(conf, cmdStore)
 	// The admin socket depends on no service. Its commands reach into others to
 	// report on them, which is observation, not dependence: forcing an edge

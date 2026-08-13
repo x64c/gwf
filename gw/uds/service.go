@@ -5,11 +5,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
+	"io/fs"
 	"log"
 	"net"
 	"os"
+	"os/user"
+	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/x64c/gwf/gw/svc"
 )
@@ -64,15 +68,26 @@ func (s *Service) Start(parentCtx context.Context) error {
 		return fmt.Errorf("cannot start: state is %v, must be READY", s.state)
 	}
 	log.Printf("[INFO][%s] Starting.", s.Name())
-	// clean up old socket if any (previous cycle may have left it)
-	_ = os.Remove(s.Conf.SocketPath)
-	// create socket
+	// A file already at the socket path is an abnormality — a live incumbent,
+	// an impostor, or a cleanup hole — and removing it would paper over
+	// whichever it is (or unlink a running instance's socket). Diagnose and
+	// refuse; the cure is proper cleanup by whoever owns the abnormality.
+	if err := refuseOccupiedPath(s.Conf.SocketPath); err != nil {
+		return err
+	}
+	// The socket must never exist at any mode other than the stated one, so
+	// it is BORN at socket_mode via umask (bind creates the file at
+	// 0777 &^ umask) rather than chmodded into shape after. The flip is
+	// process-wide for the microseconds of the bind; anything created
+	// concurrently gets tighter bits, never looser. The chmod below then
+	// guarantees the exact final mode regardless of platform umask behavior.
+	oldMask := syscall.Umask(int(0o777 &^ s.Conf.Mode().Perm()))
 	listener, err := net.Listen("unix", s.Conf.SocketPath)
+	syscall.Umask(oldMask)
 	if err != nil {
 		return fmt.Errorf("listen(%q) failed: %v", s.Conf.SocketPath, err)
 	}
-	// tighten permissions immediately after binding
-	if err = os.Chmod(s.Conf.SocketPath, 0660); err != nil {
+	if err = os.Chmod(s.Conf.SocketPath, s.Conf.Mode()); err != nil {
 		_ = listener.Close()
 		_ = os.Remove(s.Conf.SocketPath)
 		return fmt.Errorf("chmod(%q) failed: %w", s.Conf.SocketPath, err)
@@ -84,6 +99,44 @@ func (s *Service) Start(parentCtx context.Context) error {
 	log.Printf("[INFO][%s] Running. (listening on %q)", s.Name(), s.Conf.SocketPath)
 	go s.run()
 	return nil
+}
+
+// occupiedProbeTimeout bounds the liveness probe against an occupied socket
+// path. A unix-socket connect is kernel-local and answers immediately in both
+// directions (accepted, or ECONNREFUSED from a dead file); the bound exists
+// only for the pathological case of a live listener with a full backlog,
+// which must diagnose as "live" rather than hang the boot.
+//
+// Deliberately a constant, not conf: the value is consulted only in that
+// pathology, and tuning it changes neither the diagnosis nor its correctness
+// in any scenario — only how long an already-doomed boot takes to say so.
+// Healthy cases never wait at all, so no deployment loses anything practical
+// to this being hardcoded; a conf field here would be a knob connected to
+// nothing.
+const occupiedProbeTimeout = time.Second
+
+// refuseOccupiedPath diagnoses whatever sits at path and refuses it by name.
+// It never removes anything: cleanup is proper on every stop path, so a file
+// here means something is wrong, and deleting it would destroy the evidence —
+// or a running instance's socket.
+func refuseOccupiedPath(path string) error {
+	fi, err := os.Lstat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		// the normal case: the path is free
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("cannot start: stat(%q): %w", path, err)
+	}
+	if fi.Mode()&fs.ModeSocket == 0 {
+		return fmt.Errorf("cannot start: %q is occupied by a foreign non-socket file (%v) — investigate how it got there, then clean up", path, fi.Mode())
+	}
+	conn, err := net.DialTimeout("unix", path, occupiedProbeTimeout)
+	if err == nil {
+		_ = conn.Close()
+		return fmt.Errorf("cannot start: a live process is serving %q — another instance of this app, or an impostor; investigate before touching it", path)
+	}
+	return fmt.Errorf("cannot start: dead socket file at %q (unclean shutdown?) — remove it and start again", path)
 }
 
 // Stop : RUNNING → STOPPING → READY. Synchronous on the run goroutine's exit.
@@ -175,7 +228,6 @@ func (s *Service) run() {
 			log.Printf("[ERROR][%s] socket (listener) accept failed: %v", s.Name(), err)
 			continue
 		}
-		log.Printf("[INFO][%s] client connected", s.Name())
 		go s.handleConn(conn)
 	}
 }
@@ -186,14 +238,45 @@ func (s *Service) transitionAfterRun() {
 	}
 }
 
+// peerCreds is the connecting process's kernel-reported identity — uid
+// (resolved to a username when the system knows one), gid, pid — via
+// SO_PEERCRED. This is attribution for the audit log, read from the kernel
+// and unfakeable by the client; it is NOT authorization, so an unreadable
+// credential degrades to "peer=?" rather than refusing the connection.
+func peerCreds(c net.Conn) string {
+	uc, ok := c.(*net.UnixConn)
+	if !ok {
+		return "peer=?"
+	}
+	raw, err := uc.SyscallConn()
+	if err != nil {
+		return "peer=?"
+	}
+	var cred *syscall.Ucred
+	var credErr error
+	if err = raw.Control(func(fd uintptr) {
+		cred, credErr = syscall.GetsockoptUcred(int(fd), syscall.SOL_SOCKET, syscall.SO_PEERCRED)
+	}); err != nil || credErr != nil {
+		return "peer=?"
+	}
+	who := strconv.Itoa(int(cred.Uid))
+	if u, lookErr := user.LookupId(who); lookErr == nil {
+		who += "(" + u.Username + ")"
+	}
+	return fmt.Sprintf("uid=%s gid=%d pid=%d", who, cred.Gid, cred.Pid)
+}
+
 func (s *Service) handleConn(c net.Conn) {
+	peer := peerCreds(c)
+	log.Printf("[INFO][%s] client connected [%s]", s.Name(), peer)
+
 	go func() {
 		<-s.Ctx.Done()
 		_ = c.Close()
 	}()
 
 	defer func() {
-		log.Printf("[INFO][%s] client connection closed", s.Name())
+		log.Printf("[INFO][%s] client connection closed [%s]", s.Name(), peer)
 		if err := c.Close(); err != nil {
 			if !errors.Is(err, net.ErrClosed) { // && !strings.Contains(err.Error(), "use of closed network connection")
 				log.Printf("[ERROR][%s] closing client connection: %v\n", s.Name(), err)
@@ -201,20 +284,25 @@ func (s *Service) handleConn(c net.Conn) {
 		}
 	}()
 
-	reader := bufio.NewReader(io.LimitReader(c, 1<<20)) // 1 MB max per line
+	// Per-line cap: an over-cap line is ErrTooLong below, answered and closed.
+	scanner := bufio.NewScanner(c)
+	scanner.Buffer(nil, s.Conf.MaxLineBytes)
 
 	for {
 		_, _ = fmt.Fprint(c, "> ")
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				log.Printf("[INFO][%s] client disconnected", s.Name())
-			} else {
+		if !scanner.Scan() {
+			switch err := scanner.Err(); {
+			case err == nil:
+				log.Printf("[INFO][%s] client disconnected [%s]", s.Name(), peer)
+			case errors.Is(err, bufio.ErrTooLong):
+				_, _ = fmt.Fprintf(c, "ERROR> command line exceeds max_line_bytes (%d)\n", s.Conf.MaxLineBytes)
+				log.Printf("[ERROR][%s] client line exceeded max_line_bytes (%d)", s.Name(), s.Conf.MaxLineBytes)
+			default:
 				log.Printf("[ERROR][%s] client connection read error: %v\n", s.Name(), err)
 			}
 			return
 		}
-		line = strings.TrimSpace(line)
+		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
@@ -229,13 +317,13 @@ func (s *Service) handleConn(c net.Conn) {
 		}
 		// look it up in the command map
 		if handler, ok := s.GetHandler(cmdStr); ok {
-			log.Printf("[INFO][%s] `%s`\n", s.Name(), line)
+			log.Printf("[INFO][%s] [%s] `%s`\n", s.Name(), peer, line)
 			_, _ = fmt.Fprintln(c)
-			if err = handler.HandleCommand(args[1:], c); err != nil {
+			if err := handler.HandleCommand(args[1:], c); err != nil {
 				_, _ = fmt.Fprintf(c, "ERROR> %v\n", err)
-				log.Printf("[ERROR][%s] `%s` terminated: %v\n", s.Name(), line, err)
+				log.Printf("[ERROR][%s] [%s] `%s` terminated: %v\n", s.Name(), peer, line, err)
 			} else {
-				log.Printf("[INFO][%s] `%s` completed\n", s.Name(), line)
+				log.Printf("[INFO][%s] [%s] `%s` completed\n", s.Name(), peer, line)
 			}
 			_, _ = fmt.Fprintln(c)
 		} else {
