@@ -8,6 +8,9 @@ import (
 	"github.com/x64c/gwf/gw/web/responses"
 )
 
+// RecoverPanic recovers a panic raised by inner, logs it with a stack trace,
+// and writes a 500 JSON error. Its shape is a wrap step: apply it directly, or
+// call it from a HandlerWrapper's Wrap.
 func RecoverPanic(inner http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {

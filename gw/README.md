@@ -31,6 +31,11 @@ a nil where the type says otherwise, a `switch` branch proven unreachable, an
 index just bounds-checked. Nothing can "handle" it, because handling would mean
 continuing to compute wrong answers.
 
+On a request path, a panic is answered where a recovery is installed — a
+`routing.Router` that recovers in its own `ServeHTTP`, a `Wrap` that recovers,
+or `handlerwrappers.RecoverPanic` applied to a handler or a router. Reaching
+none, it passes to net/http, which logs it and closes the connection.
+
 ### Wiring mistakes
 
 Configuration and wiring errors — a required field unset, a component used

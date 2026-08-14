@@ -7,6 +7,10 @@ import (
 	"github.com/x64c/gwf/gw/web"
 )
 
+// BaseRouter is the reference implementation of Router: routing through the
+// embedded http.ServeMux, with wrapper composition on Handle, HandleFunc and
+// Group. It recovers no panic itself; a recovery placed in the chain catches
+// one.
 type BaseRouter struct {
 	*http.ServeMux
 }
