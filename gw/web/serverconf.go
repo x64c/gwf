@@ -11,15 +11,18 @@ import (
 )
 
 // ServerConf is the HTTP server's own configuration, loaded from
-// config/.web-server.json by framework.PrepareWebService.
+// config/.web-server.json by framework.LoadWebServerConf.
 //
-// Every field is REQUIRED-explicit (seconds > 0). Go's zero value for each of
-// these means "no limit" — the very defect they close — so the framework
-// rejects boot rather than pick a deadline on the operator's behalf. The
+// Every field is REQUIRED-explicit. Go's zero value for each of these means
+// "no limit", or an address nobody chose — the very defect they close — so the
+// framework rejects boot rather than decide on the operator's behalf. The
 // server is assumed to stand alone: behind a proxy these deadlines are defence
 // in depth, directly exposed they are the only defence, and the conf takes no
 // position on which deployment it is in.
 type ServerConf struct {
+	Listen string `json:"listen"` // REQUIRED. Address the server binds, "ip:port".
+	Host   string `json:"host"`   // REQUIRED. The app's canonical public origin, scheme included (e.g. "https://example.com").
+
 	ReadHeaderTimeoutSecs int `json:"read_header_timeout_secs"` // REQUIRED (> 0, <= read_timeout_secs). Deadline for reading the request headers. Bounds header-stall (slowloris) connections, which hold a socket without ever reaching a handler.
 	ReadTimeoutSecs       int `json:"read_timeout_secs"`        // REQUIRED (>= read_header_timeout_secs). Deadline for reading the WHOLE request, headers plus body. Must exceed the slowest legitimate upload on the slowest supported connection.
 	WriteTimeoutSecs      int `json:"write_timeout_secs"`       // REQUIRED (> 0). Deadline from end-of-header-read to the last response byte, so it bounds HANDLER time too. Must exceed the slowest legitimate response (report/PDF generation, long polls, streamed output).
@@ -41,6 +44,12 @@ type ServerConf struct {
 // drain window against the core shutdown budget — belong to the caller, the
 // only place where both confs are settled.
 func (c ServerConf) Validate() error {
+	if c.Listen == "" {
+		return fmt.Errorf(`listen must be set ("ip:port") in .web-server.json`)
+	}
+	if c.Host == "" {
+		return fmt.Errorf(`host must be set (e.g. "https://example.com") in .web-server.json`)
+	}
 	if c.ReadHeaderTimeoutSecs <= 0 {
 		return fmt.Errorf("read_header_timeout_secs must be set (seconds > 0) in .web-server.json: got %d", c.ReadHeaderTimeoutSecs)
 	}

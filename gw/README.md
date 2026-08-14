@@ -2,6 +2,71 @@
 
 ## Design Philosophy
 - **Compile-time over runtime** — prefer typed structs, generics, and compile-time checks over runtime type assertions, switches, or reflection when possible.
+- **Report, don't exit** — ending the process belongs to `main`; see below.
+
+## Reporting Failure: response, error, panic
+
+Guidance for code written with this framework, and the intent its own packages
+are written toward.
+
+Three channels, chosen by **who receives the report**.
+
+| Channel | Recipient | Use it for |
+|---|---|---|
+| HTTP response | the client | anything the system understood and decided: 404, 401, 403, 429, 413, 503 |
+| `error` | a Go caller that can decide | the environment misbehaving: unreachable store, missing or malformed config, a failed dependency |
+| `panic` | nobody | a promise the program itself made has been broken |
+
+**A response is not a failure.** Rejecting a request is an outcome. A wrapper
+that refuses writes its status and returns without calling the handler it
+wraps; nothing further is reported.
+
+**An error needs a caller who can act on it** — abort boot, retry, fall back,
+degrade. Where a caller exists, an error is always the right channel, because
+it leaves the decision with the code that owns the consequences.
+
+**A panic is not confusion.** Confusion about the outside world is an error.
+Panic asserts that an invariant this code itself guarantees has been violated —
+a nil where the type says otherwise, a `switch` branch proven unreachable, an
+index just bounds-checked. Nothing can "handle" it, because handling would mean
+continuing to compute wrong answers.
+
+### Wiring mistakes
+
+Configuration and wiring errors — a required field unset, a component used
+before it was prepared, a duplicate registration — are none of the three
+categories above. They are author errors, detectable before the application
+serves anything. The guidance:
+
+> **Report them as an error wherever a channel exists. Panic only where the API
+> shape genuinely has none** — a package-level `var`, or a signature that cannot
+> carry one.
+
+That is what the `…OrPanic` constructors are for, and why they are rare: each
+one exists solely because its value is declared once, at package level, where
+nothing can receive an error. The error-returning constructor is always the
+primary form.
+
+### `log.Fatal` and `os.Exit`
+
+**Ending the process is the application's decision, not a library's.** Both
+`log.Fatal*` and `os.Exit` skip every deferred function, so a library that
+exits can leave the host's resources unreleased; neither can be intercepted by
+an embedding host; and a code path that exits cannot be tested. Library code
+should report — an error where a caller exists, a panic where none can — and
+leave the exit to `main`.
+
+In an application's `main`, `log.Fatal` is appropriate in two places:
+
+- **during boot**, when a `Prepare`/`Load` step returns an error — nothing is
+  serving, no listener is bound, no pool is open, so exiting immediately costs
+  nothing;
+- **after shutdown has completed**, when `Run` returns — the ordered teardown
+  has already run, so nothing is skipped.
+
+It is not appropriate **while services are running**. There, cancel the root
+context and let the ordered shutdown finish, then exit on what it reports.
+Exiting mid-flight bypasses the teardown this framework exists to sequence.
 
 ## Concurrency and Deployment
 

@@ -3,7 +3,6 @@ package uds
 import (
 	"fmt"
 	"io"
-	"log"
 )
 
 type CommandStore struct {
@@ -12,19 +11,35 @@ type CommandStore struct {
 	groupDisplayOrder []string
 }
 
-func NewCommandStore(cmdHandlers ...CommandHandler) *CommandStore {
+func NewCommandStore(cmdHandlers ...CommandHandler) (*CommandStore, error) {
 	s := &CommandStore{
 		handlerMap:        make(map[string]CommandHandler),
 		groupMap:          make(map[string]*CommandGroup),
 		groupDisplayOrder: make([]string, 0),
 	}
-	s.SetCommandHandlers(cmdHandlers...)
+	if err := s.SetCommandHandlers(cmdHandlers...); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// NewCommandStoreOrPanic is NewCommandStore for a package-level var, where an
+// error has nowhere to go.
+// WARNING: This function panics if a command is declared twice or in
+// conflicting groups. Package initialization runs before main, so the failure
+// lands as a failed program load — nothing has bound a listener or opened a
+// pool yet. See sqldbs.NewTableOrPanic for the same rationale.
+func NewCommandStoreOrPanic(cmdHandlers ...CommandHandler) *CommandStore {
+	s, err := NewCommandStore(cmdHandlers...)
+	if err != nil {
+		panic(err)
+	}
 	return s
 }
 
-// SetCommandHandler
-// [Conflict] if the cmd already exists in a Different Group -> log.Fatal
-func (s *CommandStore) SetCommandHandler(cmdHandler CommandHandler) {
+// SetCommandHandler registers one handler, and reports a command claimed by
+// two different groups.
+func (s *CommandStore) SetCommandHandler(cmdHandler CommandHandler) error {
 	cmd := cmdHandler.Command()
 	grpName := cmdHandler.GroupName()
 
@@ -34,10 +49,10 @@ func (s *CommandStore) SetCommandHandler(cmdHandler CommandHandler) {
 	if hndExists {
 		// found the previous cmd -> group must exists and match
 		if grpName != prevHnd.GroupName() {
-			log.Fatalf("[ERROR][UDS] conflict command %q to set in groups: %q vs %q", cmd, prevHnd.GroupName(), grpName)
+			return fmt.Errorf("uds: conflict command %q to set in groups: %q vs %q", cmd, prevHnd.GroupName(), grpName)
 		}
 		if !grpExists {
-			log.Fatalf("[ERROR][UDS] missing group %q", grpName)
+			return fmt.Errorf("uds: missing group %q", grpName)
 		}
 	} else {
 		// New Command
@@ -56,12 +71,16 @@ func (s *CommandStore) SetCommandHandler(cmdHandler CommandHandler) {
 
 	grp.handlerMap[cmd] = cmdHandler
 	s.handlerMap[cmd] = cmdHandler
+	return nil
 }
 
-func (s *CommandStore) SetCommandHandlers(cmdHandlers ...CommandHandler) {
+func (s *CommandStore) SetCommandHandlers(cmdHandlers ...CommandHandler) error {
 	for _, cmdHandler := range cmdHandlers {
-		s.SetCommandHandler(cmdHandler)
+		if err := s.SetCommandHandler(cmdHandler); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func (s *CommandStore) GetHandler(cmd string) (CommandHandler, bool) {

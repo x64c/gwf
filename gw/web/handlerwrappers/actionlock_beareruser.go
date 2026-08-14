@@ -19,7 +19,7 @@ type ActionLockBearerUser[UID comparable] struct {
 	Actions     map[string]string
 }
 
-func (m *ActionLockBearerUser[UID]) Wrap(inner http.Handler) http.Handler {
+func (m *ActionLockBearerUser[UID]) Wrap(inner http.Handler) (http.Handler, error) {
 	appCore := m.AppProvider().AppCore()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Look up session only if any action needs the AuthUID.
@@ -51,5 +51,5 @@ func (m *ActionLockBearerUser[UID]) Wrap(inner http.Handler) http.Handler {
 			lockKeys = append(lockKeys, fmt.Sprintf("%s:%s", action, target))
 		}
 		runActionLocks(w, r, inner, appCore, lockKeys, uidStr)
-	})
+	}), nil
 }

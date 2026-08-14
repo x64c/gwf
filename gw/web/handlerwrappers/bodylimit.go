@@ -28,7 +28,7 @@ type BodyLimit struct {
 	Max int64
 }
 
-func (m *BodyLimit) Wrap(inner http.Handler) http.Handler {
+func (m *BodyLimit) Wrap(inner http.Handler) (http.Handler, error) {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.ContentLength > m.Max {
 			responses.WriteErrorJSON(w, http.StatusRequestEntityTooLarge,
@@ -37,5 +37,5 @@ func (m *BodyLimit) Wrap(inner http.Handler) http.Handler {
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, m.Max)
 		inner.ServeHTTP(w, r)
-	})
+	}), nil
 }

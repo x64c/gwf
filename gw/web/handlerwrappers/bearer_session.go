@@ -1,7 +1,7 @@
 package handlerwrappers
 
 import (
-	"log"
+	"fmt"
 	"net/http"
 
 	"github.com/x64c/gwf/gw/errs"
@@ -24,11 +24,11 @@ type BearerSession struct {
 	AppProvider framework.AppProviderFunc
 }
 
-func (m *BearerSession) Wrap(inner http.Handler) http.Handler {
+func (m *BearerSession) Wrap(inner http.Handler) (http.Handler, error) {
 	appCore := m.AppProvider().AppCore()
 	sessSvc := appCore.SessionService
 	if sessSvc == nil || sessSvc.BearerSessionManager == nil {
-		log.Fatal("[ERROR] BearerSession - session manager missing")
+		return nil, fmt.Errorf("BearerSession: bearer session manager missing — prepare it before wiring this middleware")
 	}
 	sessHandle := appCore.SessionHandle()
 	mgr := sessSvc.BearerSessionManager
@@ -38,5 +38,5 @@ func (m *BearerSession) Wrap(inner http.Handler) http.Handler {
 			return
 		}
 		inner.ServeHTTP(w, r)
-	})
+	}), nil
 }

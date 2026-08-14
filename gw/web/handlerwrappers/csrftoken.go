@@ -19,7 +19,7 @@ import (
 // CSRF defends against ambient-credential attacks; bearer sessions don't need it.
 type CSRFToken[UID comparable] struct{}
 
-func (m *CSRFToken[UID]) Wrap(inner http.Handler) http.Handler {
+func (m *CSRFToken[UID]) Wrap(inner http.Handler) (http.Handler, error) {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reqTkn := r.Header.Get(cookie.CSRFHeaderName)
 		if reqTkn == "" {
@@ -39,5 +39,5 @@ func (m *CSRFToken[UID]) Wrap(inner http.Handler) http.Handler {
 			return
 		}
 		inner.ServeHTTP(w, r)
-	})
+	}), nil
 }

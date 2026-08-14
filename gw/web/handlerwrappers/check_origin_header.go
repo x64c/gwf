@@ -1,7 +1,7 @@
 package handlerwrappers
 
 import (
-	"log"
+	"fmt"
 	"net/http"
 
 	"github.com/x64c/gwf/gw/errs"
@@ -19,8 +19,8 @@ import (
 // The name is literal: it checks the Origin HEADER specifically — not an
 // abstract "same-origin" guarantee. There is no Referer fallback (see below).
 //
-// Allowlist: the app's canonical origin is read from appCore.Host (set in
-// .core.json). ExtraOrigins adds additional allowed origins (e.g. legacy
+// Allowlist: the app's canonical origin is the "host" field of
+// .web-server.json. ExtraOrigins adds additional allowed origins (e.g. legacy
 // hostnames during a migration).
 //
 // Method scope:
@@ -62,23 +62,23 @@ import (
 // Scope it to cookie-session route groups (where CSRF applies). Bearer-token
 // JSON APIs don't need it — tokens aren't auto-attached cross-origin.
 //
-// Boot-time: log.Fatal if appCore.Host is empty — devs must set it in
-// .core.json before this middleware is wired.
+// The allowlist's canonical origin is the required "host" field of
+// .web-server.json, so a missing one is a boot failure before this middleware
+// is ever wired.
 type CheckOriginHeader struct {
 	AppProvider  framework.AppProviderFunc
 	ExtraOrigins []string
 	Strict       bool // true = check all methods incl. GET/HEAD/OPTIONS. Default false = skip safe methods.
 }
 
-func (m *CheckOriginHeader) Wrap(inner http.Handler) http.Handler {
+func (m *CheckOriginHeader) Wrap(inner http.Handler) (http.Handler, error) {
 	appCore := m.AppProvider().AppCore()
-	if appCore.Host == "" {
-		log.Fatal("[ERROR] CheckOriginHeader: appCore.Host is empty — set \"host\" in .core.json")
-	}
-	set := map[string]struct{}{appCore.Host: {}}
+	// Host needs no check here: .web-server.json requires it, so LoadWebServerConf
+	// has already refused the boot if it is empty.
+	set := map[string]struct{}{appCore.WebServerConf.Host: {}}
 	for _, o := range m.ExtraOrigins {
 		if o == "" {
-			log.Fatal("[ERROR] CheckOriginHeader: \"\" not allowed in ExtraOrigins")
+			return nil, fmt.Errorf(`CheckOriginHeader: "" is not an origin — remove it from ExtraOrigins`)
 		}
 		set[o] = struct{}{}
 	}
@@ -99,5 +99,5 @@ func (m *CheckOriginHeader) Wrap(inner http.Handler) http.Handler {
 			return
 		}
 		inner.ServeHTTP(w, r)
-	})
+	}), nil
 }

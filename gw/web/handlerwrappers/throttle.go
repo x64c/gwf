@@ -45,7 +45,7 @@ type Throttle struct {
 	KeyProvider   ThrottleKeyProvider
 }
 
-func (m *Throttle) Wrap(inner http.Handler) http.Handler {
+func (m *Throttle) Wrap(inner http.Handler) (http.Handler, error) {
 	throttleHandle := m.AppProvider().AppCore().ThrottleHandle()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		throttleSvc, ok := throttleHandle.Get()
@@ -63,5 +63,5 @@ func (m *Throttle) Wrap(inner http.Handler) http.Handler {
 			return
 		}
 		inner.ServeHTTP(w, r)
-	})
+	}), nil
 }

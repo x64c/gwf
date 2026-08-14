@@ -3,7 +3,6 @@ package handlerwrappers
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"time"
 
@@ -37,11 +36,11 @@ type CookieUserSession[UID comparable] struct {
 	ParseUID func(string) (UID, error)
 }
 
-func (m *CookieUserSession[UID]) Wrap(inner http.Handler) http.Handler {
+func (m *CookieUserSession[UID]) Wrap(inner http.Handler) (http.Handler, error) {
 	appCore := m.AppProvider().AppCore()
 	sessSvc := appCore.SessionService
 	if sessSvc == nil || sessSvc.CookieSessionManager == nil {
-		log.Fatal("[ERROR] CookieUserSession - session manager missing")
+		return nil, fmt.Errorf("CookieUserSession: cookie session manager missing — prepare it before wiring this middleware")
 	}
 	sessHandle := appCore.SessionHandle()
 	mgr := sessSvc.CookieSessionManager
@@ -54,8 +53,7 @@ func (m *CookieUserSession[UID]) Wrap(inner http.Handler) http.Handler {
 		authHandler = m.slidingExpHandler(inner, mgr)
 	default:
 		// Unreachable with valid config — ExpireMode is validated at PrepareCookieSessions.
-		log.Fatal("[ERROR] invalid cookie session expiration mode")
-		return nil
+		return nil, fmt.Errorf("CookieUserSession: invalid cookie session expiration mode %q", mgr.Conf.UserSession.ExpireMode)
 	}
 
 	// Gate: reject when the cookie protocol isn't serving. Lifecycle comes from
@@ -68,7 +66,7 @@ func (m *CookieUserSession[UID]) Wrap(inner http.Handler) http.Handler {
 			return
 		}
 		authHandler.ServeHTTP(w, r)
-	})
+	}), nil
 }
 
 func (m *CookieUserSession[UID]) authenticateCookieSession(

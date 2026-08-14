@@ -1,7 +1,7 @@
 package handlerwrappers
 
 import (
-	"log"
+	"fmt"
 	"net/http"
 
 	"github.com/x64c/gwf/gw/errs"
@@ -24,11 +24,11 @@ type CookieSession struct {
 	AppProvider framework.AppProviderFunc
 }
 
-func (m *CookieSession) Wrap(inner http.Handler) http.Handler {
+func (m *CookieSession) Wrap(inner http.Handler) (http.Handler, error) {
 	appCore := m.AppProvider().AppCore()
 	sessSvc := appCore.SessionService
 	if sessSvc == nil || sessSvc.CookieSessionManager == nil {
-		log.Fatal("[ERROR] CookieSession - session manager missing")
+		return nil, fmt.Errorf("CookieSession: cookie session manager missing — prepare it before wiring this middleware")
 	}
 	sessHandle := appCore.SessionHandle()
 	mgr := sessSvc.CookieSessionManager
@@ -38,5 +38,5 @@ func (m *CookieSession) Wrap(inner http.Handler) http.Handler {
 			return
 		}
 		inner.ServeHTTP(w, r)
-	})
+	}), nil
 }

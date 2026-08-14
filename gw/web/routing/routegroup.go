@@ -68,12 +68,28 @@ func (g *RouteGroup) Handle(subpattern string, handler http.Handler, handlerWrap
 	// 2. handler.ServeHTTP(w,r)
 	// 3. Post-action order:
 	//		grpHndWrapr1 <- ... <- grpHndWraprN <- hndWrapr1 <- ... <- hndWraprN
+	// Wrappers are built inner-first (the loops count down), so a failure here
+	// stops the chain before the wrappers outside it run — they would be
+	// building against state the failed one was supposed to establish.
+	//
+	// Currently the failure ends the process here. Handle cannot return an
+	// error — a route table is a list of declarations, not a sequence of
+	// checked calls — so we are still thinking about how this frame should
+	// report it instead.
 	wrappedHandler := handler
 	for i := len(handlerWrappers) - 1; i >= 0; i-- {
-		wrappedHandler = handlerWrappers[i].Wrap(wrappedHandler)
+		wrapped, err := handlerWrappers[i].Wrap(wrappedHandler)
+		if err != nil {
+			log.Fatalf("[ERROR] route %q: %v", fullPattern, err)
+		}
+		wrappedHandler = wrapped
 	}
 	for i := len(g.HandlerWrappers) - 1; i >= 0; i-- {
-		wrappedHandler = g.HandlerWrappers[i].Wrap(wrappedHandler)
+		wrapped, err := g.HandlerWrappers[i].Wrap(wrappedHandler)
+		if err != nil {
+			log.Fatalf("[ERROR] route %q (group %q): %v", fullPattern, g.Prefix, err)
+		}
+		wrappedHandler = wrapped
 	}
 	// Register the fullPattern with the WrappedHandler
 	g.Router.Handle(fullPattern, wrappedHandler)

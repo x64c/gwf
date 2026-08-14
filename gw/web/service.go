@@ -35,18 +35,18 @@ func (s *Service) State() svc.State {
 	return s.state
 }
 
-func NewService(addr string, httpHandler http.Handler, conf ServerConf) *Service {
-	return NewServiceAs("WebService", addr, httpHandler, conf)
+func NewService(httpHandler http.Handler, conf ServerConf) *Service {
+	return NewServiceAs("WebService", httpHandler, conf)
 }
 
 // NewServiceAs is NewService with the name given explicitly. A name identifies
 // a registered INSTANCE, not a type: it is what logs, status output and
 // dependency declarations all refer to, and registration rejects a duplicate.
 // The string is taken raw — uniqueness and legibility are the caller's.
-func NewServiceAs(name string, addr string, httpHandler http.Handler, conf ServerConf) *Service {
+func NewServiceAs(name string, httpHandler http.Handler, conf ServerConf) *Service {
 	return &Service{
 		name:       name,
-		addr:       addr,
+		addr:       conf.Listen,
 		handler:    httpHandler,
 		conf:       conf,
 		state:      svc.StateREADY,

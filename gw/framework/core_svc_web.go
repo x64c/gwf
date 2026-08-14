@@ -11,21 +11,29 @@ import (
 	"github.com/x64c/gwf/gw/web"
 )
 
-// PrepareWebService loads config/.web-server.json (web.ServerConf), validates
-// it — its own invariants, then the one relation it has to the already-settled
-// core conf — and registers the web service.
-// Call this when all the required services are prepared.
-func (c *Core) PrepareWebService(addr string, httpHandler http.Handler) error {
+// LoadWebServerConf reads and validates config/.web-server.json into
+// c.WebServerConf. Separate from PrepareWebService because the conf is needed
+// while the route tree is being built — handler wrappers read the app's
+// canonical Host from it — and that happens before the service is constructed.
+func (c *Core) LoadWebServerConf() error {
 	confFilePath := filepath.Join(c.AppRoot, "config", ".web-server.json")
 	confBytes, err := os.ReadFile(confFilePath)
 	if err != nil {
 		return err
 	}
-	var conf web.ServerConf
-	if err = json.Unmarshal(confBytes, &conf); err != nil {
+	if err = json.Unmarshal(confBytes, &c.WebServerConf); err != nil {
 		return err
 	}
-	if err = conf.Validate(); err != nil {
+	return c.WebServerConf.Validate()
+}
+
+// PrepareWebService validates the given conf — its own invariants, then the one
+// relation it has to the already-settled core conf — and registers the web
+// service. The conf is taken as an argument rather than read from the Core so
+// the value the server runs on is the value validated here.
+// Call this when all the required services are prepared.
+func (c *Core) PrepareWebService(conf web.ServerConf, httpHandler http.Handler) error {
+	if err := conf.Validate(); err != nil {
 		return err
 	}
 	if conf.DrainTimeoutSecs >= c.TerminateTimeoutSecs {
@@ -40,7 +48,8 @@ func (c *Core) PrepareWebService(addr string, httpHandler http.Handler) error {
 		log.Printf("[WARN][WebService] no trusted_proxy_cidrs: client address = connection peer, forwarding headers ignored.")
 	}
 
-	c.WebService = web.NewService(addr, httpHandler, conf)
+	c.WebServerConf = conf
+	c.WebService = web.NewService(httpHandler, conf)
 	// The web subsystem ships middleware that may reach for these, and it
 	// cannot know which of it the app actually mounted — the route tree arrives
 	// as an opaque handler. So it declares the POSSIBILITY. Over-declaring

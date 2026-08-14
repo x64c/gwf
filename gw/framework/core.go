@@ -26,8 +26,6 @@ import (
 
 type Core struct {
 	AppName              string                                   `json:"app_name"`
-	Listen               string                                   `json:"listen"`                 // HTTP Application Listen IP:PORT Address
-	Host                 string                                   `json:"host"`                   // HTTP Host. Can be used to generate public url endpoints
 	DebugOpts            DebugOpts                                `json:"debug_opts"`             // Debug Options
 	TerminateTimeoutSecs int                                      `json:"terminate_timeout_secs"` // REQUIRED (> 0). PER-SERVICE Terminate budget (each service gets a fresh deadline, sequentially). Worst-case total = N services × this. That total must fit under the process supervisor's kill window (e.g. systemd < 90s, launchd < 20s, docker stop < 10s).
 	AppRoot              string                                   `json:"-"`                      // Filled from compiled paths
@@ -35,6 +33,7 @@ type Core struct {
 	RootCancel           context.CancelFunc                       `json:"-"`                      // CancelFunc for RootCtx
 	UDSService           *uds.Service                             `json:"-"`                      // PrepareUDSService
 	JobSchedulerService  *jobsched.Service                        `json:"-"`                      // PrepareJobSchedulerService
+	WebServerConf        web.ServerConf                           `json:"-"`                      // LoadWebServerConf (.web-server.json). Zero when the app runs no web service.
 	WebService           *web.Service                             `json:"-"`                      // PrepareWebService
 	ClientIPResolver     requests.ClientIPResolver                `json:"-"`                      // PrepareWebService — derives the caller's address per the deployment's trusted proxies
 	SessionService       *session.Service                         `json:"-"`                      // PrepareSessionService, PrepareCookieSessions, PrepareBearerSessions

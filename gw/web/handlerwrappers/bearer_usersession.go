@@ -1,7 +1,7 @@
 package handlerwrappers
 
 import (
-	"log"
+	"fmt"
 	"net/http"
 
 	"github.com/x64c/gwf/gw/errs"
@@ -32,11 +32,11 @@ type BearerUserSession[UID comparable] struct {
 	AllowedGroups []string // empty = accept any group from config
 }
 
-func (m *BearerUserSession[UID]) Wrap(inner http.Handler) http.Handler {
+func (m *BearerUserSession[UID]) Wrap(inner http.Handler) (http.Handler, error) {
 	appCore := m.AppProvider().AppCore()
 	sessSvc := appCore.SessionService
 	if sessSvc == nil || sessSvc.BearerSessionManager == nil {
-		log.Fatal("[ERROR] BearerUserSession - session manager missing")
+		return nil, fmt.Errorf("BearerUserSession: bearer session manager missing — prepare it before wiring this middleware")
 	}
 	sessHandle := appCore.SessionHandle()
 	mgr := sessSvc.BearerSessionManager
@@ -119,5 +119,5 @@ func (m *BearerUserSession[UID]) Wrap(inner http.Handler) http.Handler {
 			Mgr:       mgr,
 		}
 		inner.ServeHTTP(w, r.WithContext(bearer.WithUserSessionData(ctx, sd)))
-	})
+	}), nil
 }

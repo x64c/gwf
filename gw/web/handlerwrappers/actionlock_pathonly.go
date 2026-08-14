@@ -20,7 +20,7 @@ type ActionLockPathOnly struct {
 	Actions     map[string]string
 }
 
-func (m *ActionLockPathOnly) Wrap(inner http.Handler) http.Handler {
+func (m *ActionLockPathOnly) Wrap(inner http.Handler) (http.Handler, error) {
 	appCore := m.AppProvider().AppCore()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		lockKeys := make([]string, 0, len(m.Actions))
@@ -28,5 +28,5 @@ func (m *ActionLockPathOnly) Wrap(inner http.Handler) http.Handler {
 			lockKeys = append(lockKeys, fmt.Sprintf("%s:%s", action, r.PathValue(targetKey)))
 		}
 		runActionLocks(w, r, inner, appCore, lockKeys, "")
-	})
+	}), nil
 }

@@ -19,7 +19,7 @@ type ActionLockCookieUser[UID comparable] struct {
 	Actions     map[string]string
 }
 
-func (m *ActionLockCookieUser[UID]) Wrap(inner http.Handler) http.Handler {
+func (m *ActionLockCookieUser[UID]) Wrap(inner http.Handler) (http.Handler, error) {
 	appCore := m.AppProvider().AppCore()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var uidStr string
@@ -50,5 +50,5 @@ func (m *ActionLockCookieUser[UID]) Wrap(inner http.Handler) http.Handler {
 			lockKeys = append(lockKeys, fmt.Sprintf("%s:%s", action, target))
 		}
 		runActionLocks(w, r, inner, appCore, lockKeys, uidStr)
-	})
+	}), nil
 }

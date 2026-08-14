@@ -24,7 +24,7 @@ type SecurityHeaders struct {
 	PermissionsPolicy     string // e.g. "camera=(), microphone=(), geolocation=()"
 }
 
-func (m *SecurityHeaders) Wrap(inner http.Handler) http.Handler {
+func (m *SecurityHeaders) Wrap(inner http.Handler) (http.Handler, error) {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		if m.ContentTypeOptions != "" {
@@ -46,5 +46,5 @@ func (m *SecurityHeaders) Wrap(inner http.Handler) http.Handler {
 			h.Set("Permissions-Policy", m.PermissionsPolicy)
 		}
 		inner.ServeHTTP(w, r)
-	})
+	}), nil
 }
