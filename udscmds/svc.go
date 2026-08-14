@@ -3,7 +3,6 @@ package udscmds
 import (
 	"fmt"
 	"io"
-	"log"
 
 	"github.com/x64c/gwf/gw/svc"
 )
@@ -25,16 +24,30 @@ type Svc struct {
 }
 
 // NewSvc builds the umbrella from the given svc-cmds, keyed by each one's
-// Name(). Duplicate names fail loud at init. Registration order is preserved.
-func NewSvc(cmds ...svc.CmdHandler) *Svc {
+// Name(). Duplicate names are reported. Registration order is preserved.
+func NewSvc(cmds ...svc.CmdHandler) (*Svc, error) {
 	m := make(map[string]svc.CmdHandler, len(cmds))
 	for _, c := range cmds {
 		if _, dup := m[c.Name()]; dup {
-			log.Fatalf("[ERROR][svc] duplicate svc-cmd name %q", c.Name())
+			return nil, fmt.Errorf("svc: duplicate svc-cmd name %q", c.Name())
 		}
 		m[c.Name()] = c
 	}
-	return &Svc{cmds: cmds, cmdMap: m}
+	return &Svc{cmds: cmds, cmdMap: m}, nil
+}
+
+// NewSvcOrPanic is NewSvc for a package-level var, where an error has nowhere
+// to go.
+// WARNING: This function panics on a duplicate svc-cmd name. Package
+// initialization runs before main, so the failure lands as a failed program
+// load — nothing has bound a listener or opened a pool yet. See
+// sqldbs.NewTableOrPanic for the same rationale.
+func NewSvcOrPanic(cmds ...svc.CmdHandler) *Svc {
+	h, err := NewSvc(cmds...)
+	if err != nil {
+		panic(err)
+	}
+	return h
 }
 
 func (h *Svc) GroupName() string { return "svc" }
