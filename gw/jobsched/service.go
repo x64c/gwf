@@ -214,6 +214,32 @@ func (s *Service) GetCronJobs() map[string]*CronJob {
 	return result
 }
 
+// runTask runs one job's Task on the job's own goroutine, converting a panic
+// into the error handed to the job's callbacks: the job fails, the scheduler
+// lives. The stack is logged here, where it exists. Without this, a panicking
+// job killed the whole process — the job goroutine has no other recover.
+func (s *Service) runTask(jobKind, jobID string, task func() error) (err error) {
+	defer func() {
+		if rcv := recover(); rcv != nil {
+			log.Printf("[PANIC][%s] %s %q Task panicked: %v\n%s", s.Name(), jobKind, jobID, rcv, debug.Stack())
+			err = fmt.Errorf("%s %q panicked: %v", jobKind, jobID, rcv)
+		}
+	}()
+	return task()
+}
+
+// runCallback runs one job callback (OnFinished, or a service-level
+// On*JobFinished) on the job's goroutine under the same guard as runTask: a
+// panicking callback fails the callback, not the process.
+func (s *Service) runCallback(jobKind, jobID, callback string, f func()) {
+	defer func() {
+		if rcv := recover(); rcv != nil {
+			log.Printf("[PANIC][%s] %s %q %s panicked: %v\n%s", s.Name(), jobKind, jobID, callback, rcv, debug.Stack())
+		}
+	}()
+	f()
+}
+
 func (s *Service) AddOneTimeJob(job *OneTimeJob) error {
 	now := time.Now()
 	margin := 30 * time.Second

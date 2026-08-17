@@ -44,6 +44,15 @@ import "context"
 // this — an internal pointer escaping through an exported accessor is a door
 // with no gate on it. Return a snapshot, or return something that consults the
 // same authority the framework does.
+//
+// PANICS. A panic escaping Start, Stop or Terminate is recovered by the
+// framework's lifecycle machinery, which completes what it owes (ordered
+// rollback or teardown) and raises the panic again for the application. A
+// panic in a goroutine the service spawns is different: nothing outside the
+// service can recover it, and it ends the process. To keep such a failure
+// inside the service's boundary, recover at the goroutine's top and report it
+// as the service's failure — the error from Start, or the error on the
+// Terminated send.
 type Service interface {
 	Name() string
 	State() State

@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"os/user"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"syscall"
@@ -319,7 +320,15 @@ func (s *Service) handleConn(c net.Conn) {
 		if handler, ok := s.GetHandler(cmdStr); ok {
 			log.Printf("[INFO][%s] [%s] `%s`\n", s.Name(), peer, line)
 			_, _ = fmt.Fprintln(c)
-			if err := handler.HandleCommand(args[1:], c); err != nil {
+			panicked, err := s.runHandler(handler, args[1:], c, peer, line)
+			if panicked {
+				// The connection dies with the answer below; the socket
+				// serves on. Without this recover, one panicking handler
+				// killed the whole process from this goroutine.
+				_, _ = fmt.Fprintf(c, "ERROR> %v\n", err)
+				return
+			}
+			if err != nil {
 				_, _ = fmt.Fprintf(c, "ERROR> %v\n", err)
 				log.Printf("[ERROR][%s] [%s] `%s` terminated: %v\n", s.Name(), peer, line, err)
 			} else {
@@ -331,4 +340,17 @@ func (s *Service) handleConn(c net.Conn) {
 		}
 	}
 
+}
+
+// runHandler runs one command handler, converting a panic into an error and
+// reporting that it panicked. The stack is logged here, where it exists.
+func (s *Service) runHandler(h CommandHandler, args []string, c net.Conn, peer, line string) (panicked bool, err error) {
+	defer func() {
+		if rcv := recover(); rcv != nil {
+			log.Printf("[PANIC][%s] [%s] `%s` handler panicked: %v\n%s", s.Name(), peer, line, rcv, debug.Stack())
+			panicked = true
+			err = fmt.Errorf("handler panicked: %v", rcv)
+		}
+	}()
+	return false, h.HandleCommand(args, c)
 }

@@ -31,6 +31,16 @@ import "log"
 // one.
 func (c *Core) Run() error {
 	log.Printf("[INFO][%s] app.Run()", c.AppName)
+	// A service panic re-raised by StartServices or WaitServicesTerminated
+	// passes through here. This frame releases what IT owns — the
+	// infrastructure clients — then lets the panic continue to main, where a
+	// defer/recover is the application's choice.
+	defer func() {
+		if rcv := recover(); rcv != nil {
+			c.ResourceCleanUp()
+			panic(rcv)
+		}
+	}()
 	if err := c.StartServices(); err != nil {
 		c.ResourceCleanUp() // services were already unwound by StartServices
 		return err

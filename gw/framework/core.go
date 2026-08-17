@@ -2,11 +2,13 @@ package framework
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"html/template"
 	"io/fs"
 	"log"
 	"net/http"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -52,10 +54,11 @@ type Core struct {
 	StorageClients       map[string]storages.Client               `json:"-"`                      // PrepareStorageClients
 
 	// internal
-	serviceGraph serviceGraph  // services and the dependencies between them; drives start order, teardown order, and admission
-	shutdownDone chan struct{} // closed once the shutdown walk has finished; what WaitServicesTerminated blocks on
-	shutdownErr  error         // first error the walk recorded, including an abandoned service
-	shutdownOnce sync.Once     // the walk publishes its result exactly once
+	serviceGraph  serviceGraph   // services and the dependencies between them; drives start order, teardown order, and admission
+	shutdownDone  chan struct{}  // closed once the shutdown walk has finished; what WaitServicesTerminated blocks on
+	shutdownErr   error          // first error the walk recorded, including an abandoned service
+	shutdownPanic *svcPanicError // first panic the walk recovered; re-raised by WaitServicesTerminated on its caller's goroutine
+	shutdownOnce  sync.Once      // the walk publishes its result exactly once
 
 	// Core's own services' nodes, retained at their Prepare* so the *Handle
 	// accessors (core_handles.go) can mint gated references. nil = the app
@@ -133,18 +136,50 @@ func (c *Core) StartServices() error {
 	started := make([]*ServiceNode, 0, len(c.serviceGraph.nodes))
 	for i := len(levels) - 1; i >= 0; i-- {
 		for _, n := range levels[i] {
-			if err := n.svc.Start(c.RootCtx); err != nil {
+			if err := startNode(n, c.RootCtx); err != nil {
 				c.rollbackStarted(started, n, err)
+				// A panicking Start continues as a panic — after the rollback
+				// this frame owes. Start is called on this goroutine, so the
+				// re-raise lands on StartServices' caller directly.
+				var sp *svcPanicError
+				if errors.As(err, &sp) {
+					panic(sp.val)
+				}
 				return err
 			}
 			n.admitted.Store(true)
 			// One collector per node, so a barrier can wait for THIS service
 			// rather than merely counting how many have reported.
-			go func(n *ServiceNode) { n.termSig <- <-n.svc.Terminated() }(n)
+			go func(n *ServiceNode) {
+				// Terminated() is the service author's code. A panic here has
+				// no signal to deliver, so the node reaches its terminate
+				// deadline and is abandoned — degraded, but still ordered.
+				defer func() {
+					if rcv := recover(); rcv != nil {
+						log.Printf("[PANIC] service %q Terminated() relay panicked: %v\n%s — no signal will be collected; the node will be abandoned at its terminate deadline", n.name, rcv, debug.Stack())
+					}
+				}()
+				n.termSig <- <-n.svc.Terminated()
+			}(n)
 			started = append(started, n)
 		}
 	}
 	return nil
+}
+
+// startNode calls one service's Start, converting a panic into a
+// *svcPanicError with the stack logged where it happened. The caller decides
+// what the panic becomes: the boot walk rolls back and re-raises it, the
+// operator path reports it as the command's error.
+func startNode(n *ServiceNode, parentCtx context.Context) (err error) {
+	defer func() {
+		if rcv := recover(); rcv != nil {
+			stack := debug.Stack()
+			log.Printf("[PANIC] service %q panicked during start: %v\n%s", n.name, rcv, stack)
+			err = &svcPanicError{node: n.name, val: rcv, stack: stack}
+		}
+	}()
+	return n.svc.Start(parentCtx)
 }
 
 // rollbackStarted tears down what a failed boot had already brought up, so a
@@ -186,7 +221,9 @@ func (c *Core) StartServiceNode(n *ServiceNode) error {
 	if n == nil || n.svc == nil {
 		return fmt.Errorf("start: no service behind this node")
 	}
-	if err := n.svc.Start(c.RootCtx); err != nil {
+	// A panicking Start reaches the operator as the command's error (startNode
+	// converts it, stack logged there); the service stays un-admitted.
+	if err := startNode(n, c.RootCtx); err != nil {
 		return err
 	}
 	n.admitted.Store(true)
@@ -200,10 +237,20 @@ func (c *Core) StartServiceNode(n *ServiceNode) error {
 // thing telling new callers "unavailable". A stopped service stays un-admitted
 // until an operator starts it again — including when Stop itself returns an
 // error, since a service that failed to stop cleanly is not one to readmit.
-func (c *Core) StopServiceNode(ctx context.Context, n *ServiceNode) error {
+func (c *Core) StopServiceNode(ctx context.Context, n *ServiceNode) (err error) {
 	if n == nil || n.svc == nil {
 		return fmt.Errorf("stop: no service behind this node")
 	}
+	// A panicking Stop reaches the operator as the command's error; admission
+	// was already revoked, and a service that failed to stop cleanly stays
+	// un-admitted — the same rule as an ordinary Stop error.
+	defer func() {
+		if rcv := recover(); rcv != nil {
+			stack := debug.Stack()
+			log.Printf("[PANIC] service %q panicked during stop: %v\n%s", n.name, rcv, stack)
+			err = &svcPanicError{node: n.name, val: rcv, stack: stack}
+		}
+	}()
 	n.admitted.Store(false)
 	return n.svc.Stop(ctx)
 }
@@ -211,8 +258,19 @@ func (c *Core) StopServiceNode(ctx context.Context, n *ServiceNode) error {
 // WaitServicesTerminated blocks until the shutdown walk has finished, and
 // returns the first error it recorded — including a service that was abandoned,
 // so an app can exit non-zero on a shutdown that discarded work.
+//
+// If a service PANICKED during the walk, this call re-raises that panic here —
+// on its caller's goroutine — once the ordered teardown has completed. The
+// framework never converts the panic into a return value: it defers it past
+// the release it owes, then lets it continue. Uncaught, the process dies by
+// panic as it would have anyway; a defer/recover around this call (or around
+// app.Run) is where an application chooses otherwise. The panicking service's
+// stack is logged at the recover site — the re-raise carries the value only.
 func (c *Core) WaitServicesTerminated() error {
 	<-c.shutdownDone
+	if c.shutdownPanic != nil {
+		panic(c.shutdownPanic.val)
+	}
 	return c.shutdownErr
 }
 
@@ -250,6 +308,10 @@ func (c *Core) TerminateServices() {
 			if err != nil && firstErr == nil {
 				firstErr = err
 			}
+			var sp *svcPanicError
+			if errors.As(err, &sp) && c.shutdownPanic == nil {
+				c.shutdownPanic = sp // first panic wins; later ones stay node errors, already logged with their stacks
+			}
 		}
 		log.Printf("[INFO] terminate level %d/%d complete (%d services)", i, len(levels)-1, len(level))
 	}
@@ -276,7 +338,21 @@ func (c *Core) TerminateServices() {
 // would have terminated perfectly. At shutdown the alternative to breaking the
 // guarantee is not staying correct, it is losing everyone's cleanup — so we
 // break it in one defined direction, loudly, and report a degraded shutdown.
-func (c *Core) terminateNode(n *ServiceNode) error {
+func (c *Core) terminateNode(n *ServiceNode) (err error) {
+	// A panic from the service's Terminate fires on this walk goroutine — the
+	// only frame that can recover it. The node is ABANDONED: its release
+	// provably never completed and no Terminated signal will ever come. The
+	// stack is logged here, where it exists; the panic value travels on as
+	// this node's error and is re-raised by WaitServicesTerminated once the
+	// ordered walk has finished.
+	defer func() {
+		if rcv := recover(); rcv != nil {
+			n.abandoned = true
+			stack := debug.Stack()
+			log.Printf("[PANIC] service %q panicked during terminate — ABANDONED (its release never completed): %v\n%s", n.name, rcv, stack)
+			err = &svcPanicError{node: n.name, val: rcv, stack: stack}
+		}
+	}()
 	n.admitted.Store(false)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.TerminateTimeoutSecs)*time.Second)
 	defer cancel()

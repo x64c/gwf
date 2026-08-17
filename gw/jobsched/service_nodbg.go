@@ -19,12 +19,12 @@ func (s *Service) runOneTimeJob(job *OneTimeJob) {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		err := job.Task()
+		err := s.runTask("one-time job", job.ID, job.Task)
 		if job.OnFinished != nil {
-			job.OnFinished(err)
+			s.runCallback("one-time job", job.ID, "OnFinished", func() { job.OnFinished(err) })
 		}
 		if s.OnOneTimeJobFinished != nil {
-			s.OnOneTimeJobFinished(job, err)
+			s.runCallback("one-time job", job.ID, "OnOneTimeJobFinished", func() { s.OnOneTimeJobFinished(job, err) })
 		}
 	}()
 }
@@ -48,12 +48,12 @@ func (s *Service) runCronJob(job *CronJob) {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		err := job.Task()
+		err := s.runTask("cron job", job.ID, job.Task)
 		if job.OnFinished != nil {
-			job.OnFinished(err)
+			s.runCallback("cron job", job.ID, "OnFinished", func() { job.OnFinished(err) })
 		}
 		if s.OnCronJobFinished != nil {
-			s.OnCronJobFinished(job, err)
+			s.runCallback("cron job", job.ID, "OnCronJobFinished", func() { s.OnCronJobFinished(job, err) })
 		}
 	}()
 }

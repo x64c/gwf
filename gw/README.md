@@ -36,6 +36,26 @@ On a request path, a panic is answered where a recovery is installed — a
 or `handlerwrappers.RecoverPanic` applied to a handler or a router. Reaching
 none, it passes to net/http, which logs it and closes the connection.
 
+On a lifecycle path, a panic escaping a service's `Start` or `Terminate` is
+recovered by the framework, which completes the ordered rollback or teardown
+and then raises the panic again on the goroutine that called `Run` — a
+`defer`/`recover` there catches it; uncaught, the process dies by panic. A
+panicking scheduled job fails that job, with the panic as the error handed to
+its callbacks. A panicking UDS command handler ends that connection with an
+error answer. Inside goroutines a service spawns itself, only the service's
+own code can recover a panic; report it as the service's failure — the error
+from `Start`, or the error on the `Terminated` send.
+
+On a lifecycle path, a panic escaping a service's `Start` or `Terminate` is
+recovered by the framework, which completes the ordered rollback or teardown
+and then raises the panic again on the goroutine that called `Run` — a
+`defer`/`recover` there catches it; uncaught, the process dies by panic. A
+panicking scheduled job fails that job, with the panic as the error handed to
+its callbacks. A panicking UDS command handler ends that connection with an
+error answer. Inside goroutines a service spawns itself, only the service's
+own code can recover a panic; report it as the service's failure — the error
+from `Start`, or the error on the `Terminated` send.
+
 ### Wiring mistakes
 
 Configuration and wiring errors — a required field unset, a component used
