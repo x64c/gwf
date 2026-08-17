@@ -1,10 +1,10 @@
 module github.com/x64c/gwf/kvdbs/redis
 
-go 1.26.5
+go 1.26.6
 
 require (
 	github.com/redis/go-redis/v9 v9.22.0
-	github.com/x64c/gwf/gw v0.6.5
+	github.com/x64c/gwf/gw v0.6.6
 )
 
 require (
