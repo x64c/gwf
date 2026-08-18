@@ -8,6 +8,7 @@ import (
 
 	"github.com/x64c/gwf/gw/errs"
 	"github.com/x64c/gwf/gw/security"
+	"github.com/x64c/gwf/gw/web/session/caplist"
 )
 
 func (m *SessionManager) UserSessionRowKey(sessionID string) string {
@@ -64,7 +65,7 @@ func (m *SessionManager) StoreUserSession(ctx context.Context, uidStr string) (s
 			_, _ = m.KVDB.Expire(ctx, usrSessionListKey, slidingExpiration)
 		}()
 
-		if err := m.enforceUserSessionCap(ctx, usrSessionListKey); err != nil {
+		if err := caplist.EvictOverCap(ctx, m.KVDB, usrSessionListKey, m.Conf.UserSession.MaxSessionsPerUser, m.UserSessionRowKey("")); err != nil {
 			return "", err
 		}
 	}
@@ -216,43 +217,6 @@ func (m *SessionManager) VerifyUserSessionCookie(ctx context.Context, r *http.Re
 	}
 	if !found {
 		return errs.CookieSessionNotFound
-	}
-	return nil
-}
-
-// enforceUserSessionCap enforces Conf.UserSession.MaxSessionsPerUser on the given user's
-// session list. If the list size exceeds the cap, the oldest sessions are
-// evicted — both their umbrella rows in KVDB AND their entries in the list —
-// until the list size is back at the cap. No-op if the list is already at or
-// below the cap.
-//
-// Caller MUST hold the SessionLocks mutex for usrSessionListKey before calling.
-// Without the lock, a concurrent session-create can push a new sid between the
-// Len read and the Trim, evicting the wrong entries.
-//
-// usrSessionListKey is the KVDB list key for this user, formatted as
-// "{appName}:cul:{uidStr}".
-func (m *SessionManager) enforceUserSessionCap(ctx context.Context, usrSessionListKey string) error {
-	sessionCnt, err := m.KVDB.ListLen(ctx, usrSessionListKey)
-	if err != nil {
-		return err
-	}
-	if sessionCnt <= m.Conf.UserSession.MaxSessionsPerUser {
-		return nil
-	}
-
-	diff := sessionCnt - m.Conf.UserSession.MaxSessionsPerUser
-	sessionsToDel, err := m.KVDB.ListRange(ctx, usrSessionListKey, 0, diff-1)
-	if err != nil {
-		return err
-	}
-	keysToDel := make([]string, 0, len(sessionsToDel))
-	for _, sid := range sessionsToDel {
-		keysToDel = append(keysToDel, m.UserSessionRowKey(sid))
-	}
-	_, _ = m.KVDB.Delete(ctx, keysToDel...)
-	if err = m.KVDB.ListTrim(ctx, usrSessionListKey, diff, -1); err != nil {
-		return err
 	}
 	return nil
 }

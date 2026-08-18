@@ -42,6 +42,6 @@ type SessionCapConf struct {
 type SessionClientConf struct {
 	Name          string            `json:"-"`               // populated from JSON clients-map key at boot; for diagnostics
 	ID            string            `json:"id"`              // Client-Id header value; "" = clientless
-	ExtAuthSecret string            `json:"ext_auth_secret"` // external auth provider secret (OAuth client secret, etc.)
+	ExtAuthSecret string            `json:"ext_auth_secret"` // external auth provider secret (OAuth client secret, etc.), carried for the application's own verifier code — the framework does not read or enforce it
 	Group         *SessionGroupConf `json:"-"`               // back-ref to parent group, set at boot
 }

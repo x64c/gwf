@@ -29,7 +29,7 @@ import (
 // Zero therefore means one thing everywhere it appears, whatever the verb: a
 // lifetime already over, so the key goes. Nothing is stored for no time, and
 // nothing outlives a lifetime of none. Storing without a lifetime is a separate
-// operation with its own name (ValueSetPersistent), as is dropping one (Persist), so
+// operation with its own name (SetValuePersistent), as is dropping one (Persist), so
 // neither has to be smuggled in as a duration that means its opposite.
 //
 // Lifetimes are not negative; an implementation rejects a negative duration
@@ -40,7 +40,7 @@ import (
 // publishes is not, so that any caller can predict its behavior from P alone,
 // and check it.
 //
-// VALUES. What a store holds is a string, which is why ValueGet and the hash readers
+// VALUES. What a store holds is a string, which is why GetValue and the hash readers
 // return one. Writes take any as a convenience: an implementation accepts
 // whichever types it can encode, and how it encodes them is its own business —
 // this interface neither specifies that nor can see it.
@@ -93,15 +93,56 @@ type DB interface {
 
 	//---- Single-value Ops ----
 
-	// ValueSet stores a value under key for the given lifetime. A lifetime of zero is
+	// SetValue stores a value under key for the given lifetime. A lifetime of zero is
 	// one already over, so the key is removed and the value never exists — as
-	// with any lifetime too short to span a mark. Use ValueSetPersistent to store
+	// with any lifetime too short to span a mark. Use SetValuePersistent to store
 	// without a lifetime; there is no spelling of "no lifetime" as a duration.
-	ValueSet(ctx context.Context, key string, value any, expiration time.Duration) error
-	// ValueSetPersistent stores a value under key with no lifetime, removing any the
+	SetValue(ctx context.Context, key string, value any, expiration time.Duration) error
+	// SetValuePersistent stores a value under key with no lifetime, removing any the
 	// key already had.
-	ValueSetPersistent(ctx context.Context, key string, value any) error
-	ValueGet(ctx context.Context, key string) (string, bool, error) // val, found, err
+	SetValuePersistent(ctx context.Context, key string, value any) error
+	GetValue(ctx context.Context, key string) (string, bool, error) // val, found, err
+
+	// Conditional writes — the check and the write are ONE atomic act in the
+	// store, so among any number of concurrent callers exactly one wins.
+	// The bool is the store's verdict: true = the key was absent and is now
+	// set; false = the key already exists, untouched. When err is non-nil the
+	// operation itself failed and the bool carries no information. Losing the
+	// race is a normal outcome, not an error.
+	//
+	// The lifetime must span at least one mark: a zero or shorter lifetime has
+	// no honorable atomic outcome for a conditional write (the key cannot be
+	// written, and an existing key must not be touched), so it is an error —
+	// unlike SetValue, whose zero collapses to removal.
+
+	// SetValueIfNotExists stores the value under key ONLY if the key does not
+	// exist, with the given lifetime.
+	SetValueIfNotExists(ctx context.Context, key string, value any, expiration time.Duration) (bool, error)
+	// SetValuePersistentIfNotExists stores the value under key ONLY if the key
+	// does not exist, with no lifetime.
+	SetValuePersistentIfNotExists(ctx context.Context, key string, value any) (bool, error)
+
+	// Integer interpretation — values are stored as strings; the two methods
+	// below interpret a value as a base-10 signed 64-bit integer, and error on
+	// a value that cannot be read that way. They are the ONLY integer view:
+	// a counter read through GetValue is its string form.
+
+	// IncrementValue atomically adds delta to the integer under key and
+	// returns the new total (an absent key counts from zero). It also ensures
+	// the key carries a lifetime: the given lifetime is applied whenever the
+	// key has none — including the moment this increment creates it — and an
+	// existing lifetime is never extended or shortened. The lifetime must span
+	// at least one mark; use IncrementValuePersistent for a counter with no
+	// lifetime.
+	IncrementValue(ctx context.Context, key string, delta int64, lifetime time.Duration) (int64, error)
+	// IncrementValuePersistent is IncrementValue for a counter with no
+	// lifetime: an absent key is created persistent, and an existing lifetime
+	// is left untouched.
+	IncrementValuePersistent(ctx context.Context, key string, delta int64) (int64, error)
+	// GetValueAsInt64 reads the value under key through the same integer
+	// interpretation IncrementValue writes with. found reports whether the key
+	// exists; a value that does not parse as such an integer is an error.
+	GetValueAsInt64(ctx context.Context, key string) (int64, bool, error)
 
 	//---- List Ops ----
 

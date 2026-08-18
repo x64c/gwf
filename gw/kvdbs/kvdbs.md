@@ -16,7 +16,7 @@ enough: `Len` of what, `Remove` of what?
 | group | prefix | why |
 |---|---|---|
 | key ops | none | `Exists`, `TTL`, `Delete`, `Expire`, `Persist`, `Type`, `ScanKeys`, `Clock` apply to a key whatever it holds |
-| value | `Value…` | `ValueSet`, `ValueSetPersistent`, `ValueGet` |
+| value | `…Value` | `SetValue`, `SetValuePersistent`, `GetValue` — verb first, the type as suffix |
 | list | `List…` | `ListPush`, `ListPop`, `ListLen`, `ListRange`, `ListRemove`, `ListTrim` |
 | hash | `Hash…` | `HashSetField(s)`, `HashGetField(s)`, `HashGetAll`, `HashRemoveFields`, … |
 
@@ -45,7 +45,7 @@ it anchor at its own reading and land a tick short.
 **Zero means one thing everywhere, whatever the verb: a lifetime already over,
 so the key goes.** Nothing is stored for no time, and nothing outlives a
 lifetime of none. Storing without a lifetime is a separate operation with its
-own name (`ValueSetPersistent`), as is dropping one (`Persist`) — neither is
+own name (`SetValuePersistent`), as is dropping one (`Persist`) — neither is
 smuggled in as a duration that means its opposite. Lifetimes are never
 negative; an implementation rejects one rather than inventing a meaning.
 

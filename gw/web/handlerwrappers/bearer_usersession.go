@@ -71,7 +71,7 @@ func (m *BearerUserSession[UID]) Wrap(inner http.Handler) (http.Handler, error) 
 
 		// Two-hop: access token hash → sid → umbrella row
 		hash := security.HashHexSHA256(accessToken)
-		sid, found, err := mgr.KVDB.ValueGet(ctx, mgr.AccessTokenRowKey(hash))
+		sid, found, err := mgr.KVDB.GetValue(ctx, mgr.AccessTokenRowKey(hash))
 		if err != nil {
 			responses.WriteErrorJSON(w, http.StatusInternalServerError, errs.KVDB.Wrap(err))
 			return

@@ -10,6 +10,10 @@ type WhereClause struct {
 // Build produces " WHERE <cond>" with dialect-specific placeholder translation.
 // startNth is the placeholder numbering offset (number of bind args
 // already in the base SQL + 1). Provided by the caller.
+//
+// A dialect that consumes the generic `?` placeholders exactly as
+// Cond.BindRepr emits them has nothing to translate: `" WHERE " + raw` over
+// BindRepr's output is complete, and such a driver may do that directly.
 func (w WhereClause) Build(dbClient Client, startNth int) (string, []any) {
 	if w.Cond == nil {
 		return "", nil

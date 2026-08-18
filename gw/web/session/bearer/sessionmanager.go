@@ -12,6 +12,7 @@ import (
 	"github.com/x64c/gwf/gw/security"
 	"github.com/x64c/gwf/gw/svc"
 	"github.com/x64c/gwf/gw/web/fwupstream"
+	"github.com/x64c/gwf/gw/web/session/caplist"
 	"github.com/x64c/gwf/gw/web/session/lockstore"
 )
 
@@ -149,10 +150,10 @@ func (m *SessionManager) CreateSession(
 	if err := m.KVDB.HashSetFieldsWithKeyTTL(ctx, m.SessionRowKey(sessionID), umbrellaFields, refreshTTL); err != nil {
 		return "", "", "", err
 	}
-	if err := m.KVDB.ValueSet(ctx, m.AccessTokenRowKey(accessHash), sessionID, accessTTL); err != nil {
+	if err := m.KVDB.SetValue(ctx, m.AccessTokenRowKey(accessHash), sessionID, accessTTL); err != nil {
 		return "", "", "", err
 	}
-	if err := m.KVDB.ValueSet(ctx, m.RefreshTokenRowKey(refreshHash), sessionID, refreshTTL); err != nil {
+	if err := m.KVDB.SetValue(ctx, m.RefreshTokenRowKey(refreshHash), sessionID, refreshTTL); err != nil {
 		return "", "", "", err
 	}
 
@@ -174,7 +175,7 @@ func (m *SessionManager) CreateSession(
 			_, _ = m.KVDB.Expire(ctx, bucketKey, refreshTTL)
 		}()
 
-		if err := m.enforceSessionCap(ctx, bucketKey, group.Cap.Max); err != nil {
+		if err := caplist.EvictOverCap(ctx, m.KVDB, bucketKey, int64(group.Cap.Max), m.SessionRowKey("")); err != nil {
 			return "", "", "", err
 		}
 	}
@@ -257,7 +258,7 @@ func (m *SessionManager) FetchSession(ctx context.Context, sessionID string) (*S
 // row is missing (evicted/expired).
 func (m *SessionManager) FetchSessionByAccessToken(ctx context.Context, rawToken string) (*SessionRow, error) {
 	hash := security.HashHexSHA256(rawToken)
-	sid, found, err := m.KVDB.ValueGet(ctx, m.AccessTokenRowKey(hash))
+	sid, found, err := m.KVDB.GetValue(ctx, m.AccessTokenRowKey(hash))
 	if err != nil {
 		return nil, err
 	}
@@ -273,7 +274,7 @@ func (m *SessionManager) FetchSessionByAccessToken(ctx context.Context, rawToken
 // row is missing (evicted/expired).
 func (m *SessionManager) FetchSessionByRefreshToken(ctx context.Context, rawToken string) (*SessionRow, error) {
 	hash := security.HashHexSHA256(rawToken)
-	sid, found, err := m.KVDB.ValueGet(ctx, m.RefreshTokenRowKey(hash))
+	sid, found, err := m.KVDB.GetValue(ctx, m.RefreshTokenRowKey(hash))
 	if err != nil {
 		return nil, err
 	}
@@ -292,7 +293,7 @@ func (m *SessionManager) ExtendSession(ctx context.Context, refreshToken string)
 
 	// STEP 1: resolve refresh token → sid + umbrella row + group conf
 	refreshHash := security.HashHexSHA256(refreshToken)
-	sid, found, err := m.KVDB.ValueGet(ctx, m.RefreshTokenRowKey(refreshHash))
+	sid, found, err := m.KVDB.GetValue(ctx, m.RefreshTokenRowKey(refreshHash))
 	if err != nil {
 		return "", "", errs.KVDB.WithDetail("fetching refresh token row").WithCause(err)
 	}
@@ -360,10 +361,10 @@ func (m *SessionManager) ExtendSession(ctx context.Context, refreshToken string)
 	// STEP 4: write new access + refresh token rows (pointers to sid)
 	accessTTL := time.Duration(group.AccessTTL) * time.Second
 	refreshTTL := time.Duration(group.RefreshTTL) * time.Second
-	if err := m.KVDB.ValueSet(ctx, m.AccessTokenRowKey(newAccessHash), sid, accessTTL); err != nil {
+	if err := m.KVDB.SetValue(ctx, m.AccessTokenRowKey(newAccessHash), sid, accessTTL); err != nil {
 		return "", "", errs.KVDB.WithDetail("writing new access token row").WithCause(err)
 	}
-	if err := m.KVDB.ValueSet(ctx, m.RefreshTokenRowKey(newRefreshHash), sid, refreshTTL); err != nil {
+	if err := m.KVDB.SetValue(ctx, m.RefreshTokenRowKey(newRefreshHash), sid, refreshTTL); err != nil {
 		return "", "", errs.KVDB.WithDetail("writing new refresh token row").WithCause(err)
 	}
 
@@ -415,41 +416,3 @@ func (m *SessionManager) ExtendSession(ctx context.Context, refreshToken string)
 	return newAccess, newRefresh, nil
 }
 
-// enforceSessionCap enforces capMax on the cap bucket's session list. If the
-// list size exceeds the cap, the oldest sessions are evicted — both their
-// umbrella rows in KVDB AND their entries in the list — until the list size
-// is back at the cap. No-op if the list is already at or below the cap.
-//
-// Caller MUST hold the SessionLocks mutex for bucketKey before calling.
-// Without the lock, a concurrent session-create can push a new sid between the
-// Len read and the Trim, evicting the wrong entries.
-//
-// Access/refresh token rows of evicted sessions are intentionally not deleted
-// here — they become harmless pointer rows whose lookup target (the umbrella)
-// is now missing, so requests using them fail at the umbrella-fetch step.
-// Redis TTL reclaims their memory naturally; doing it explicitly would cost an
-// extra HMGET + 2 deletes per evicted session for no functional benefit.
-func (m *SessionManager) enforceSessionCap(ctx context.Context, bucketKey string, capMax int) error {
-	sessionCnt, err := m.KVDB.ListLen(ctx, bucketKey)
-	if err != nil {
-		return err
-	}
-	if sessionCnt <= int64(capMax) {
-		return nil
-	}
-
-	diff := sessionCnt - int64(capMax)
-	sessionsToDel, err := m.KVDB.ListRange(ctx, bucketKey, 0, diff-1)
-	if err != nil {
-		return err
-	}
-	keysToDel := make([]string, 0, len(sessionsToDel))
-	for _, sid := range sessionsToDel {
-		keysToDel = append(keysToDel, m.SessionRowKey(sid))
-	}
-	_, _ = m.KVDB.Delete(ctx, keysToDel...)
-	if err = m.KVDB.ListTrim(ctx, bucketKey, diff, -1); err != nil {
-		return err
-	}
-	return nil
-}
