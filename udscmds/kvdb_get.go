@@ -41,7 +41,7 @@ func (h *KvdbGet) HandleCommand(args []string, w io.Writer) error {
 	}
 	switch typeName {
 	case "string":
-		strVal, found, err := appCore.MainKVDB.ValueGet(ctx, key)
+		strVal, found, err := appCore.MainKVDB.GetValue(ctx, key)
 		if err != nil {
 			return err
 		}

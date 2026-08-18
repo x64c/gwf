@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	lowimpl "github.com/redis/go-redis/v9"
@@ -118,7 +119,7 @@ func (d *DB) ScanKeys(ctx context.Context, cursor any, scanBatchSize int) ([]str
 
 //---- Single-value Ops ----
 
-func (d *DB) ValueGet(ctx context.Context, key string) (string, bool, error) {
+func (d *DB) GetValue(ctx context.Context, key string) (string, bool, error) {
 	val, err := d.internal.Get(ctx, key).Result()
 	if errors.Is(err, lowimpl.Nil) {
 		return "", false, nil // redis.Nil -> ok: false, err: nil
@@ -129,7 +130,7 @@ func (d *DB) ValueGet(ctx context.Context, key string) (string, bool, error) {
 	return val, true, nil
 }
 
-func (d *DB) ValueSet(ctx context.Context, key string, value any, expiration time.Duration) error {
+func (d *DB) SetValue(ctx context.Context, key string, value any, expiration time.Duration) error {
 	if expiration < 0 {
 		return fmt.Errorf("%w: %v", ErrNegativeLifetime, expiration)
 	}
@@ -141,10 +142,65 @@ func (d *DB) ValueSet(ctx context.Context, key string, value any, expiration tim
 	return d.internal.Del(ctx, key).Err()
 }
 
-// ValueSetPersistent stores a value with no lifetime. A plain SET carries no expiry
+// SetValuePersistent stores a value with no lifetime. A plain SET carries no expiry
 // option and discards whatever the key already had.
-func (d *DB) ValueSetPersistent(ctx context.Context, key string, value any) error {
+func (d *DB) SetValuePersistent(ctx context.Context, key string, value any) error {
 	return d.internal.Set(ctx, key, value, 0).Err()
+}
+
+func (d *DB) SetValueIfNotExists(ctx context.Context, key string, value any, expiration time.Duration) (bool, error) {
+	if expiration < 0 {
+		return false, fmt.Errorf("%w: %v", ErrNegativeLifetime, expiration)
+	}
+	ttl := d.lifetime(expiration)
+	if ttl <= 0 {
+		// No honorable atomic outcome: the value cannot be written for a span
+		// of nothing, and an existing key must not be touched.
+		return false, fmt.Errorf("SetValueIfNotExists: lifetime spans nothing: %v", expiration)
+	}
+	return d.internal.SetNX(ctx, key, value, ttl).Result()
+}
+
+func (d *DB) SetValuePersistentIfNotExists(ctx context.Context, key string, value any) (bool, error) {
+	return d.internal.SetNX(ctx, key, value, 0).Result()
+}
+
+func (d *DB) IncrementValue(ctx context.Context, key string, delta int64, lifetime time.Duration) (int64, error) {
+	if lifetime < 0 {
+		return 0, fmt.Errorf("%w: %v", ErrNegativeLifetime, lifetime)
+	}
+	ttl := d.lifetime(lifetime)
+	if ttl <= 0 {
+		return 0, fmt.Errorf("IncrementValue: lifetime spans nothing: %v (use IncrementValuePersistent for no lifetime)", lifetime)
+	}
+	total, err := d.internal.IncrBy(ctx, key, delta).Result()
+	if err != nil {
+		return 0, err
+	}
+	// Applied only when the key has none — never extends or shortens one.
+	if err := d.internal.ExpireNX(ctx, key, ttl).Err(); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+func (d *DB) IncrementValuePersistent(ctx context.Context, key string, delta int64) (int64, error) {
+	return d.internal.IncrBy(ctx, key, delta).Result()
+}
+
+func (d *DB) GetValueAsInt64(ctx context.Context, key string) (int64, bool, error) {
+	val, err := d.internal.Get(ctx, key).Result()
+	if errors.Is(err, lowimpl.Nil) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	n, err := strconv.ParseInt(val, 10, 64)
+	if err != nil {
+		return 0, true, fmt.Errorf("GetValueAsInt64: value under %q is not a base-10 int64: %w", key, err)
+	}
+	return n, true, nil
 }
 
 //---- List Ops ----

@@ -52,41 +52,36 @@ func (d *DB) QueryRowsRaw(ctx context.Context, query string, args ...any) (sqldb
 // Verb-guarded — still caller-written SQL, with a first-word check added.
 
 func (d *DB) SelectRowRaw(ctx context.Context, query string, args ...any) (sqldbs.Row, error) {
-	trimmed := strings.TrimSpace(query)
-	if !strings.HasPrefix(strings.ToUpper(trimmed), "SELECT") {
-		return nil, fmt.Errorf("SelectRowRaw: query must start with SELECT")
+	if err := sqldbs.CheckRawVerb("SelectRowRaw", "SELECT", query); err != nil {
+		return nil, err
 	}
 	return d.QueryRowRaw(ctx, query, args...), nil
 }
 
 func (d *DB) SelectRowsRaw(ctx context.Context, query string, args ...any) (sqldbs.Rows, error) {
-	trimmed := strings.TrimSpace(query)
-	if !strings.HasPrefix(strings.ToUpper(trimmed), "SELECT") {
-		return nil, fmt.Errorf("SelectRowsRaw: query must start with SELECT")
+	if err := sqldbs.CheckRawVerb("SelectRowsRaw", "SELECT", query); err != nil {
+		return nil, err
 	}
 	return d.QueryRowsRaw(ctx, query, args...)
 }
 
 func (d *DB) InsertRowsRaw(ctx context.Context, query string, args ...any) (int64, error) {
-	trimmed := strings.TrimSpace(query)
-	if !strings.HasPrefix(strings.ToUpper(trimmed), "INSERT") {
-		return 0, fmt.Errorf("InsertRowsRaw: query must start with INSERT")
+	if err := sqldbs.CheckRawVerb("InsertRowsRaw", "INSERT", query); err != nil {
+		return 0, err
 	}
 	return d.Exec(ctx, query, args...)
 }
 
 func (d *DB) UpdateRowsRaw(ctx context.Context, query string, args ...any) (int64, error) {
-	trimmed := strings.TrimSpace(query)
-	if !strings.HasPrefix(strings.ToUpper(trimmed), "UPDATE") {
-		return 0, fmt.Errorf("UpdateRowsRaw: query must start with UPDATE")
+	if err := sqldbs.CheckRawVerb("UpdateRowsRaw", "UPDATE", query); err != nil {
+		return 0, err
 	}
 	return d.Exec(ctx, query, args...)
 }
 
 func (d *DB) DeleteRowsRaw(ctx context.Context, query string, args ...any) (int64, error) {
-	trimmed := strings.TrimSpace(query)
-	if !strings.HasPrefix(strings.ToUpper(trimmed), "DELETE") {
-		return 0, fmt.Errorf("DeleteRowsRaw: query must start with DELETE")
+	if err := sqldbs.CheckRawVerb("DeleteRowsRaw", "DELETE", query); err != nil {
+		return 0, err
 	}
 	return d.Exec(ctx, query, args...)
 }
