@@ -99,7 +99,7 @@ func (t *Tx) SelectRow(ctx context.Context, table *sqldbs.Table, pkValue sqldbs.
 	if err := table.ValidatePK(pkValue); err != nil {
 		return nil, fmt.Errorf("SelectRow: %w", err)
 	}
-	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s LIMIT 1", sqldbs.QuoteJoinIdentifiers(t.db.client, cols.Names()), t.db.client.QuoteIdentifier(table.Name()), wherePK(t.db.client, table))
+	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s LIMIT 1", sqldbs.QuoteJoinIdentifiers(t.db.client, cols.Names()), t.db.client.QuoteIdentifier(table.Name()), sqldbs.WherePK(t.db.client, table, 1))
 	return t.QueryRowRaw(ctx, query, pkValue...), nil
 }
 
@@ -111,11 +111,9 @@ func (t *Tx) SelectRows(ctx context.Context, table *sqldbs.Table, where sqldbs.C
 	query := fmt.Sprintf("SELECT %s FROM %s", sqldbs.QuoteJoinIdentifiers(t.db.client, cols.Names()), t.db.client.QuoteIdentifier(table.Name()))
 	var args []any
 	if where != nil {
-		whereRaw, whereArgs := where.BindRepr()
-		if whereRaw != "" {
-			query += " WHERE " + whereRaw
-			args = whereArgs
-		}
+		whereSQL, whereArgs := sqldbs.WhereClause{Cond: where}.Build(t.db.client, 1)
+		query += whereSQL
+		args = whereArgs
 	}
 	return t.QueryRowsRaw(ctx, query, args...)
 }
@@ -192,7 +190,7 @@ func (t *Tx) UpdateRow(ctx context.Context, table *sqldbs.Table, pkValue sqldbs.
 	for i, col := range columns {
 		setClauses[i] = t.db.client.QuoteIdentifier(col) + " = ?"
 	}
-	query := fmt.Sprintf("UPDATE %s SET %s WHERE %s", t.db.client.QuoteIdentifier(table.Name()), strings.Join(setClauses, ", "), wherePK(t.db.client, table))
+	query := fmt.Sprintf("UPDATE %s SET %s WHERE %s", t.db.client.QuoteIdentifier(table.Name()), strings.Join(setClauses, ", "), sqldbs.WherePK(t.db.client, table, len(columns)+1))
 	// Built fresh rather than appended to: values belongs to the caller, and
 	// appending would write the key into their backing array when it has room.
 	args := make([]any, 0, len(values)+len(pkValue))
@@ -216,11 +214,10 @@ func (t *Tx) UpdateRows(ctx context.Context, table *sqldbs.Table, columns []stri
 	args := make([]any, len(values))
 	copy(args, values)
 	if where != nil {
-		whereRaw, whereArgs := where.BindRepr()
-		if whereRaw != "" {
-			query += " WHERE " + whereRaw
-			args = append(args, whereArgs...)
-		}
+		startNth := len(columns) + 1
+		whereSQL, whereArgs := sqldbs.WhereClause{Cond: where}.Build(t.db.client, startNth)
+		query += whereSQL
+		args = append(args, whereArgs...)
 	}
 	return t.Exec(ctx, query, args...)
 }
@@ -231,7 +228,7 @@ func (t *Tx) DeleteRow(ctx context.Context, table *sqldbs.Table, pkValue sqldbs.
 	if err := table.ValidatePK(pkValue); err != nil {
 		return 0, fmt.Errorf("DeleteRow: %w", err)
 	}
-	query := fmt.Sprintf("DELETE FROM %s WHERE %s", t.db.client.QuoteIdentifier(table.Name()), wherePK(t.db.client, table))
+	query := fmt.Sprintf("DELETE FROM %s WHERE %s", t.db.client.QuoteIdentifier(table.Name()), sqldbs.WherePK(t.db.client, table, 1))
 	return t.Exec(ctx, query, pkValue...)
 }
 
@@ -239,11 +236,9 @@ func (t *Tx) DeleteRows(ctx context.Context, table *sqldbs.Table, where sqldbs.C
 	query := fmt.Sprintf("DELETE FROM %s", t.db.client.QuoteIdentifier(table.Name()))
 	var args []any
 	if where != nil {
-		whereRaw, whereArgs := where.BindRepr()
-		if whereRaw != "" {
-			query += " WHERE " + whereRaw
-			args = whereArgs
-		}
+		whereSQL, whereArgs := sqldbs.WhereClause{Cond: where}.Build(t.db.client, 1)
+		query += whereSQL
+		args = whereArgs
 	}
 	return t.Exec(ctx, query, args...)
 }

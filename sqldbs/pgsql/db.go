@@ -103,7 +103,7 @@ func (d *DB) SelectRow(ctx context.Context, table *sqldbs.Table, pkValue sqldbs.
 	if err := table.ValidatePK(pkValue); err != nil {
 		return nil, fmt.Errorf("SelectRow: %w", err)
 	}
-	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s LIMIT 1", sqldbs.QuoteJoinIdentifiers(d.client, cols.Names()), d.client.QuoteIdentifier(table.Name()), wherePK(d.client, table, 1))
+	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s LIMIT 1", sqldbs.QuoteJoinIdentifiers(d.client, cols.Names()), d.client.QuoteIdentifier(table.Name()), sqldbs.WherePK(d.client, table, 1))
 	return d.QueryRowRaw(ctx, query, pkValue...), nil
 }
 
@@ -201,7 +201,7 @@ func (d *DB) UpdateRow(ctx context.Context, table *sqldbs.Table, pkValue sqldbs.
 	for i, col := range columns {
 		setClauses[i] = fmt.Sprintf("%s = $%d", d.client.QuoteIdentifier(col), i+1)
 	}
-	query := fmt.Sprintf("UPDATE %s SET %s WHERE %s", d.client.QuoteIdentifier(table.Name()), strings.Join(setClauses, ", "), wherePK(d.client, table, len(columns)+1))
+	query := fmt.Sprintf("UPDATE %s SET %s WHERE %s", d.client.QuoteIdentifier(table.Name()), strings.Join(setClauses, ", "), sqldbs.WherePK(d.client, table, len(columns)+1))
 	// Built fresh rather than appended to: values belongs to the caller, and
 	// appending would write the key into their backing array when it has room.
 	args := make([]any, 0, len(values)+len(pkValue))
@@ -239,7 +239,7 @@ func (d *DB) DeleteRow(ctx context.Context, table *sqldbs.Table, pkValue sqldbs.
 	if err := table.ValidatePK(pkValue); err != nil {
 		return 0, fmt.Errorf("DeleteRow: %w", err)
 	}
-	query := fmt.Sprintf("DELETE FROM %s WHERE %s", d.client.QuoteIdentifier(table.Name()), wherePK(d.client, table, 1))
+	query := fmt.Sprintf("DELETE FROM %s WHERE %s", d.client.QuoteIdentifier(table.Name()), sqldbs.WherePK(d.client, table, 1))
 	return d.Exec(ctx, query, pkValue...)
 }
 
