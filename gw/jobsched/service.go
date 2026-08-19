@@ -13,16 +13,25 @@ import (
 
 type Service struct {
 	name        string             // registered instance identity; see NewServiceAs
-	Ctx         context.Context    // per-cycle runtime context (set in Start)
+	ctx         context.Context    // per-cycle runtime context (set in Start)
 	cancel      context.CancelFunc // per-cycle cancel (set in Start)
-	state       svc.State          // internal service state
+	state       svc.AtomicState    // internal service state (State() may be read concurrently with lifecycle writes)
 	terminated  chan error         // one-shot; fires when Terminate completes
 	stopped     chan struct{}      // per-cycle; closed when run goroutine has stopped
 	oneTimeJobs map[int64][]*OneTimeJob
 	cronJobs    map[string]*CronJob
 	mu          sync.Mutex
 	wg          sync.WaitGroup
-	// Default Callbacks
+
+	// callbacks is boot wiring behind SetCallbacks: the fields are plain funcs
+	// read from job goroutines, so a write after Start would be a data race —
+	// which is why they are not exported fields.
+	callbacks Callbacks
+}
+
+// Callbacks are the service-level job-event callbacks, set as one unit at boot
+// via SetCallbacks. nil fields are simply not called.
+type Callbacks struct {
 	OnOneTimeJobAdded    func(job *OneTimeJob)
 	OnCronJobAdded       func(job *CronJob)
 	OnOneTimeJobFinished func(job *OneTimeJob, err error)
@@ -31,12 +40,25 @@ type Service struct {
 	OnCronJobDeleted     func(job *CronJob)
 }
 
+// SetCallbacks installs the service-level callbacks. Callbacks are BOOT
+// WIRING: they are read from job goroutines without a lock, race-free only
+// under the contract that the write happens before Start. A call in any state
+// but READY is refused with an error — refusal, not a process kill, same as
+// throttle.SetBucketGroup.
+func (s *Service) SetCallbacks(cb Callbacks) error {
+	if state := s.state.Load(); state != svc.StateREADY {
+		return fmt.Errorf("jobsched %q: can't set callbacks: state is %v — callbacks are boot wiring, set before Start", s.Name(), state)
+	}
+	s.callbacks = cb
+	return nil
+}
+
 func (s *Service) Name() string {
 	return s.name
 }
 
 func (s *Service) State() svc.State {
-	return s.state
+	return s.state.Load()
 }
 
 func NewService() *Service {
@@ -48,52 +70,56 @@ func NewService() *Service {
 // dependency declarations all refer to, and registration rejects a duplicate.
 // The string is taken raw — uniqueness and legibility are the caller's.
 func NewServiceAs(name string) *Service {
-	return &Service{
+	s := &Service{
 		name:        name,
-		state:       svc.StateREADY,
 		terminated:  make(chan error, 1),
 		oneTimeJobs: make(map[int64][]*OneTimeJob),
 		cronJobs:    make(map[string]*CronJob),
 	}
+	s.state.Store(svc.StateREADY)
+	return s
 }
 
-// UseDefaultLoggers set scheduer-level loggers with default ones
-func (s *Service) UseDefaultLoggers() {
-	s.OnOneTimeJobAdded = func(job *OneTimeJob) {
-		log.Printf("[INFO] One-time job added: %s for %v", job.ID, job.ExecTime)
-	}
-	s.OnCronJobAdded = func(job *CronJob) {
-		log.Printf("[INFO] cron job added: %s", job.ID)
-	}
-	s.OnCronJobFinished = func(job *CronJob, err error) {
-		if err == nil {
-			log.Printf("[INFO] cron job finished: %s", job.ID)
-		} else {
-			log.Printf("[INFO] cron job finished: %s with error: %v", job.ID, err)
-		}
-	}
-	s.OnOneTimeJobFinished = func(job *OneTimeJob, err error) {
-		if err == nil {
-			log.Printf("[INFO] one-time job finished: %s", job.ID)
-		} else {
-			log.Printf("[INFO] one-time job finished: %s with error: %v", job.ID, err)
-		}
-	}
+// UseDefaultLoggers installs default logging callbacks — SetCallbacks with a
+// stock Callbacks value, same boot-wiring contract.
+func (s *Service) UseDefaultLoggers() error {
+	return s.SetCallbacks(Callbacks{
+		OnOneTimeJobAdded: func(job *OneTimeJob) {
+			log.Printf("[INFO] One-time job added: %s for %v", job.ID, job.ExecTime)
+		},
+		OnCronJobAdded: func(job *CronJob) {
+			log.Printf("[INFO] cron job added: %s", job.ID)
+		},
+		OnCronJobFinished: func(job *CronJob, err error) {
+			if err == nil {
+				log.Printf("[INFO] cron job finished: %s", job.ID)
+			} else {
+				log.Printf("[INFO] cron job finished: %s with error: %v", job.ID, err)
+			}
+		},
+		OnOneTimeJobFinished: func(job *OneTimeJob, err error) {
+			if err == nil {
+				log.Printf("[INFO] one-time job finished: %s", job.ID)
+			} else {
+				log.Printf("[INFO] one-time job finished: %s with error: %v", job.ID, err)
+			}
+		},
+	})
 }
 
 // Start : READY → RUNNING. parentCtx is the runtime cancellation lineage.
 // Lifecycle methods (Start/Stop/Terminate) are not safe to call concurrently.
 func (s *Service) Start(parentCtx context.Context) error {
-	if s.state == svc.StateRUNNING {
+	if s.state.Load() == svc.StateRUNNING {
 		return nil // idempotent
 	}
-	if s.state != svc.StateREADY {
-		return fmt.Errorf("cannot start: state is %v, must be READY", s.state)
+	if s.state.Load() != svc.StateREADY {
+		return fmt.Errorf("cannot start: state is %v, must be READY", s.state.Load())
 	}
 	log.Printf("[INFO][%s] Starting.", s.Name())
-	s.Ctx, s.cancel = context.WithCancel(parentCtx)
+	s.ctx, s.cancel = context.WithCancel(parentCtx)
 	s.stopped = make(chan struct{}) // fresh per cycle
-	s.state = svc.StateRUNNING
+	s.state.Store(svc.StateRUNNING)
 	log.Printf("[INFO][%s] Running.", s.Name())
 	go s.run()
 	return nil
@@ -102,24 +128,24 @@ func (s *Service) Start(parentCtx context.Context) error {
 // Stop : RUNNING → STOPPING → READY. Synchronous on the run goroutine's exit
 // (which waits for all worker goroutines to finish first).
 func (s *Service) Stop(ctx context.Context) error {
-	if s.state == svc.StateREADY {
+	if s.state.Load() == svc.StateREADY {
 		return nil // idempotent
 	}
-	if s.state != svc.StateRUNNING {
-		return fmt.Errorf("cannot stop: state is %v, must be RUNNING", s.state)
+	if s.state.Load() != svc.StateRUNNING {
+		return fmt.Errorf("cannot stop: state is %v, must be RUNNING", s.state.Load())
 	}
-	s.state = svc.StateSTOPPING
+	s.state.Store(svc.StateSTOPPING)
 	return s.stop(ctx)
 }
 
 // Terminate : any → TERMINATING (irreversible). If RUNNING, full stop;
 // if STOPPING, just wait for run goroutine to exit. Fires Terminated.
 func (s *Service) Terminate(ctx context.Context) (err error) {
-	if s.state == svc.StateTERMINATING {
+	if s.state.Load() == svc.StateTERMINATING {
 		return nil // idempotent — returns before the defer arms
 	}
-	prevState := s.state
-	s.state = svc.StateTERMINATING
+	prevState := s.state.Load()
+	s.state.Store(svc.StateTERMINATING)
 	log.Printf("[INFO][%s] Terminating.", s.Name())
 	defer func() {
 		s.terminated <- err // THE ONLY send site; unconditional, exactly once
@@ -167,7 +193,7 @@ func (s *Service) run() {
 	defer s.transitionAfterRun() // LIFO: runs first
 	for {
 		select {
-		case <-s.Ctx.Done():
+		case <-s.ctx.Done():
 			s.wg.Wait() // wait for all worker goroutines
 			return
 		case now := <-ticker.C:
@@ -185,31 +211,41 @@ func (s *Service) run() {
 }
 
 func (s *Service) transitionAfterRun() {
-	if s.state == svc.StateSTOPPING {
-		s.state = svc.StateREADY
+	if s.state.Load() == svc.StateSTOPPING {
+		s.state.Store(svc.StateREADY)
 	}
 }
 
-// GetOneTimeJobs returns a copy of all pending one-time jobs, keyed by their scheduled minute-level timestamp.
+// GetOneTimeJobs returns a snapshot of all pending one-time jobs, keyed by
+// their scheduled minute-level timestamp. The jobs are struct copies: mutating
+// one changes nothing the scheduler runs (svc.Service: no escape hatches).
 func (s *Service) GetOneTimeJobs() map[int64][]*OneTimeJob {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	result := make(map[int64][]*OneTimeJob, len(s.oneTimeJobs))
 	for key, jobs := range s.oneTimeJobs {
-		result[key] = append([]*OneTimeJob(nil), jobs...) // copy slice to avoid external mutation
+		copies := make([]*OneTimeJob, len(jobs))
+		for i, job := range jobs {
+			j := *job
+			copies[i] = &j
+		}
+		result[key] = copies
 	}
 	return result
 }
 
-// GetCronJobs returns a copy of all registered cron jobs, keyed by their ID.
+// GetCronJobs returns a snapshot of all registered cron jobs, keyed by their
+// ID. The jobs are struct copies: mutating one changes nothing the scheduler
+// runs (svc.Service: no escape hatches).
 func (s *Service) GetCronJobs() map[string]*CronJob {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	result := make(map[string]*CronJob, len(s.cronJobs))
 	for id, job := range s.cronJobs {
-		result[id] = job // shallow copy of the pointer; job itself is shared
+		j := *job
+		result[id] = &j
 	}
 	return result
 }
@@ -271,8 +307,8 @@ func (s *Service) AddOneTimeJob(job *OneTimeJob) error {
 			job.OnAdded()
 		}()
 	}
-	if s.OnOneTimeJobAdded != nil { // Service-level default callback
-		s.OnOneTimeJobAdded(job)
+	if s.callbacks.OnOneTimeJobAdded != nil { // Service-level default callback
+		s.callbacks.OnOneTimeJobAdded(job)
 	}
 	return nil
 }
@@ -299,8 +335,8 @@ func (s *Service) AddCronJob(job *CronJob) error {
 		}()
 	}
 	// Service-level default callback
-	if s.OnCronJobAdded != nil {
-		s.OnCronJobAdded(job)
+	if s.callbacks.OnCronJobAdded != nil {
+		s.callbacks.OnCronJobAdded(job)
 	}
 	return nil
 }
@@ -313,8 +349,8 @@ func (s *Service) DeleteOneTimeJob(jobID string) {
 		filtered := jobs[:0]
 		for _, job := range jobs {
 			if job.ID == jobID {
-				if s.OnOneTimeJobDeleted != nil {
-					s.OnOneTimeJobDeleted(job)
+				if s.callbacks.OnOneTimeJobDeleted != nil {
+					s.callbacks.OnOneTimeJobDeleted(job)
 				}
 			} else {
 				filtered = append(filtered, job)
@@ -339,7 +375,7 @@ func (s *Service) DeleteCronJob(jobID string) {
 	delete(s.cronJobs, jobID)
 	s.mu.Unlock()
 	// trigger global delete callback outside lock
-	if s.OnCronJobDeleted != nil {
-		s.OnCronJobDeleted(job)
+	if s.callbacks.OnCronJobDeleted != nil {
+		s.callbacks.OnCronJobDeleted(job)
 	}
 }

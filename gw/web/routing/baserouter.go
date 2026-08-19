@@ -1,7 +1,7 @@
 package routing
 
 import (
-	"log"
+	"fmt"
 	"net/http"
 
 	"github.com/x64c/gwf/gw/web"
@@ -18,13 +18,14 @@ type BaseRouter struct {
 var _ Router = (*BaseRouter)(nil)
 
 func (r *BaseRouter) Handle(pattern string, handler http.Handler, handlerWrappers ...web.HandlerWrapper) {
-	// Built inner-first; a failure stops the chain there. See RouteGroup.Handle
-	// for why this frame's disposal of the error is still its existing behavior.
+	// Built inner-first; a failure stops the chain there — and PANICS, by
+	// design. See RouteGroup.Handle for the reasoning (stdlib parity,
+	// boot-time fail-fast).
 	wrappedHandler := handler
 	for i := len(handlerWrappers) - 1; i >= 0; i-- {
 		wrapped, err := handlerWrappers[i].Wrap(wrappedHandler)
 		if err != nil {
-			log.Fatalf("[ERROR] route %q: %v", pattern, err)
+			panic(fmt.Sprintf("routing: route %q: %v", pattern, err))
 		}
 		wrappedHandler = wrapped
 	}

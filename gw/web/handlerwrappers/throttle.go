@@ -1,11 +1,13 @@
 package handlerwrappers
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/x64c/gwf/gw/errs"
 	"github.com/x64c/gwf/gw/framework"
+	"github.com/x64c/gwf/gw/throttle"
 	"github.com/x64c/gwf/gw/web/responses"
 )
 
@@ -47,6 +49,18 @@ type Throttle struct {
 
 func (m *Throttle) Wrap(inner http.Handler) (http.Handler, error) {
 	throttleHandle := m.AppProvider().AppCore().ThrottleHandle()
+	// Wrap-time group validation, on the NODE plane: routes are built before
+	// StartServices, so the handle refuses Get() here — but the service exists
+	// and its groups are already set (boot wiring precedes route building). A
+	// mistyped group id is a named boot failure instead of a route that 429s
+	// forever with nothing ever saying why. An app with no throttle service at
+	// all keeps the absent behavior: wrap proceeds, the absent handle answers
+	// 503 per request.
+	if svc, ok := throttleHandle.Node().Service().(*throttle.Service); ok {
+		if !svc.HasGroup(m.BucketGroupID) {
+			return nil, fmt.Errorf("Throttle: unknown bucket group %q — set it with SetBucketGroup before building routes", m.BucketGroupID)
+		}
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		throttleSvc, ok := throttleHandle.Get()
 		if !ok {

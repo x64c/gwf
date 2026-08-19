@@ -37,10 +37,6 @@ func (m *SessionManager) CreateAnonymousSession(ctx context.Context, w http.Resp
 // Anonymous sessions have no per-user cap. The caller is responsible for setting
 // the cookie via SetAnonymousSessionCookie.
 func (m *SessionManager) StoreAnonymousSession(ctx context.Context) (string, error) {
-	if !m.Serving() {
-		return "", errs.SessionServiceUnavailable.WithDetail("cookie anonymous session")
-	}
-
 	sessionID := security.GenerateHex(16)
 	csrfTkn := security.GenerateBase64RawURL(32)
 	slidingExpiration := time.Duration(m.Conf.AnonymousSession.ExpireIn) * time.Second

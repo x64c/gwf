@@ -46,10 +46,6 @@ type BucketGroup struct {
 	buckets *bucketMap
 }
 
-func (g *BucketGroup) GetBucket(id string) (*Bucket, bool) {
-	return g.buckets.load(id)
-}
-
 // loadOrCreateBucket returns the bucket for id, creating a full one if absent.
 //
 // LoadOrStore, not load-then-store: concurrent first hits on one id must all

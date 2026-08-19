@@ -27,7 +27,7 @@ import (
 // stale entries, not the total entry count.
 type Service struct {
 	name             string             // registered instance identity; see NewServiceAs
-	Ctx              context.Context    // per-cycle runtime context (set in Start)
+	ctx              context.Context    // per-cycle runtime context (set in Start)
 	cancel           context.CancelFunc // per-cycle cancel (set in Start)
 	state            svc.AtomicState    // internal service state (read on the request path by the session middleware)
 	terminated       chan error         // one-shot; fires when Terminate completes
@@ -83,7 +83,7 @@ func (s *Service) Start(parentCtx context.Context) error {
 		return fmt.Errorf("cannot start: state is %v, must be READY", s.state.Load())
 	}
 	log.Printf("[INFO][%s] Starting.", s.Name())
-	s.Ctx, s.cancel = context.WithCancel(parentCtx)
+	s.ctx, s.cancel = context.WithCancel(parentCtx)
 	s.stopped = make(chan struct{}) // fresh per cycle
 	s.state.Store(svc.StateRUNNING)
 	log.Printf("[INFO][%s] Running. (cleanup cycle=%v exp=%v)", s.Name(), s.cleanupCycle, s.cleanupOlderThan)
@@ -158,7 +158,7 @@ func (s *Service) run() {
 	defer s.transitionAfterRun() // LIFO: runs first, before close(s.stopped)
 	for {
 		select {
-		case <-s.Ctx.Done():
+		case <-s.ctx.Done():
 			return
 		case now := <-ticker.C:
 			func() {
@@ -168,7 +168,7 @@ func (s *Service) run() {
 					}
 				}()
 				log.Printf("[INFO][%s] %v cleanup cycle ...", s.Name(), s.cleanupCycle)
-				s.Cleanup(now)
+				s.cleanup(now)
 			}()
 		}
 	}
@@ -180,16 +180,16 @@ func (s *Service) transitionAfterRun() {
 	}
 }
 
-// Cleanup walks SessionLocks, skips recently-touched entries (cheap), and
+// cleanup walks SessionLocks, skips recently-touched entries (cheap), and
 // deletes entries whose KVDB key no longer exists (the actual KVDB call is
 // only made for entries idle ≥ cleanupOlderThan).
-func (s *Service) Cleanup(now time.Time) {
+func (s *Service) cleanup(now time.Time) {
 	threshold := now.Add(-s.cleanupOlderThan).UnixNano()
 	s.SessionLocks.Range(func(key string, entry *lockstore.LockEntry) bool {
 		if entry.LastTouchedNano() > threshold {
 			return true // recently active; skip cheap
 		}
-		exists, err := s.KVDB.Exists(s.Ctx, key)
+		exists, err := s.KVDB.Exists(s.ctx, key)
 		if err != nil {
 			return true // transient KVDB error; skip this entry this cycle
 		}

@@ -24,7 +24,7 @@ func (c *Core) UDSHandle() ServiceHandle[*uds.Service] {
 	if c.udsNode == nil {
 		return absentServiceHandle[*uds.Service]()
 	}
-	return newServiceHandle(c.udsNode, c.UDSService)
+	return newServiceHandle(c.udsNode, c.udsService)
 }
 
 // JobSchedulerHandle returns the gated reference to the job-scheduler service.
@@ -32,7 +32,7 @@ func (c *Core) JobSchedulerHandle() ServiceHandle[*jobsched.Service] {
 	if c.jobSchedulerNode == nil {
 		return absentServiceHandle[*jobsched.Service]()
 	}
-	return newServiceHandle(c.jobSchedulerNode, c.JobSchedulerService)
+	return newServiceHandle(c.jobSchedulerNode, c.jobSchedulerService)
 }
 
 // WebHandle returns the gated reference to the web service.
@@ -40,7 +40,7 @@ func (c *Core) WebHandle() ServiceHandle[*web.Service] {
 	if c.webNode == nil {
 		return absentServiceHandle[*web.Service]()
 	}
-	return newServiceHandle(c.webNode, c.WebService)
+	return newServiceHandle(c.webNode, c.webService)
 }
 
 // SessionHandle returns the gated reference to the session service.
@@ -48,7 +48,7 @@ func (c *Core) SessionHandle() ServiceHandle[*session.Service] {
 	if c.sessionNode == nil {
 		return absentServiceHandle[*session.Service]()
 	}
-	return newServiceHandle(c.sessionNode, c.SessionService)
+	return newServiceHandle(c.sessionNode, c.sessionService)
 }
 
 // ThrottleHandle returns the gated reference to the throttle service.
@@ -56,5 +56,5 @@ func (c *Core) ThrottleHandle() ServiceHandle[*throttle.Service] {
 	if c.throttleNode == nil {
 		return absentServiceHandle[*throttle.Service]()
 	}
-	return newServiceHandle(c.throttleNode, c.ThrottleService)
+	return newServiceHandle(c.throttleNode, c.throttleService)
 }

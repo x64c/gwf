@@ -89,9 +89,13 @@ type Service interface {
 	Stop(ctx context.Context) error
 
 	// Terminate transitions any state → TERMINATING (immediate, irreversible).
-	// Releases all resources, including prepared state. Triggers async cleanup;
-	// observe Terminated() to know when cleanup truly completes. Once Terminated
-	// fires, the service is gone and state field is observationally irrelevant.
+	// It ends the ACTIVE part for good and releases external resources —
+	// listeners, sockets, files. The passive in-memory state is RETAINED, not
+	// released: callers still hold pointers (see the type doc), and methods must
+	// stay safe to call after Terminate — a service that nil'd its own maps
+	// would panic the callers already inside it. Triggers async cleanup; observe
+	// Terminated() to know when cleanup truly completes. Once Terminated fires,
+	// the service is gone and state field is observationally irrelevant.
 	//
 	// Implementation guideline:
 	//

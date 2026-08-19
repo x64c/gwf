@@ -4,7 +4,7 @@ package throttle
 
 import "time"
 
-func (s *Service) Cleanup(now time.Time) {
+func (s *Service) cleanup(now time.Time) {
 	for _, g := range s.groups {
 		g.buckets.rangeAll(func(id string, b *Bucket) bool {
 			// lock per bucket while checking/removing

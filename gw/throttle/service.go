@@ -11,7 +11,7 @@ import (
 
 type Service struct {
 	name             string             // registered instance identity; see NewServiceAs
-	Ctx              context.Context    // per-cycle runtime context (set in Start)
+	ctx              context.Context    // per-cycle runtime context (set in Start)
 	cancel           context.CancelFunc // per-cycle cancel (set in Start)
 	state            svc.AtomicState    // internal service state (read on the request path via Allow)
 	terminated       chan error         // one-shot; fires when Terminate completes
@@ -59,7 +59,7 @@ func (s *Service) Start(parentCtx context.Context) error {
 		return fmt.Errorf("cannot start: state is %v, must be READY", s.state.Load())
 	}
 	log.Printf("[INFO][%s] Starting.", s.Name())
-	s.Ctx, s.cancel = context.WithCancel(parentCtx)
+	s.ctx, s.cancel = context.WithCancel(parentCtx)
 	s.stopped = make(chan struct{}) // fresh per cycle
 	s.state.Store(svc.StateRUNNING)
 	log.Printf("[INFO][%s] Running. (cleanup cycle=%v exp=%v)", s.Name(), s.cleanupCycle, s.cleanupOlderThan)
@@ -141,7 +141,7 @@ func (s *Service) run() {
 	defer s.transitionAfterRun() // declared 3rd → runs FIRST (LIFO defer order)
 	for {
 		select {
-		case <-s.Ctx.Done():
+		case <-s.ctx.Done():
 			return
 		case now := <-ticker.C:
 			func() {
@@ -151,7 +151,7 @@ func (s *Service) run() {
 					}
 				}()
 				log.Printf("[INFO][%s] %v cleanup cycle ...", s.Name(), s.cleanupCycle)
-				s.Cleanup(now)
+				s.cleanup(now)
 			}()
 		}
 	}
@@ -166,17 +166,23 @@ func (s *Service) transitionAfterRun() {
 	}
 }
 
-func (s *Service) GetBucketGroup(id string) (*BucketGroup, bool) {
+// getBucketGroup is internal on purpose: a *BucketGroup reaches live buckets,
+// and a live bucket escaping through an exported accessor is callable behind
+// the admission gate for the life of the process (svc.Service: no escape
+// hatches). External callers get Allow (the verdict), HasGroup (the boot-time
+// existence question) and Inspect (a snapshot).
+func (s *Service) getBucketGroup(id string) (*BucketGroup, bool) {
 	g, ok := s.groups[id]
 	return g, ok
 }
 
-func (s *Service) GetBucket(groupID string, bucketID string) (*Bucket, bool) {
-	g, ok := s.groups[groupID]
-	if !ok {
-		return nil, false
-	}
-	return g.GetBucket(bucketID)
+// HasGroup reports whether a bucket group is registered under id. Groups are
+// boot wiring (see SetBucketGroup), so after Start the answer is stable — this
+// is what lets a wrapper validate its group id at wrap time and turn a mistype
+// into a named boot failure instead of a permanently dead route.
+func (s *Service) HasGroup(id string) bool {
+	_, ok := s.groups[id]
+	return ok
 }
 
 // SetBucketGroup registers a bucket group by id. Groups are BOOT WIRING: the
@@ -207,7 +213,7 @@ func (s *Service) SetBucketGroup(id string, conf *BucketConf) error {
 // keep computing honest verdicts; a bool cannot express "unavailable", which
 // is exactly why no lifecycle answer may be folded into this one.
 func (s *Service) Allow(groupID string, bucketID string, now time.Time) bool {
-	g, ok := s.GetBucketGroup(groupID)
+	g, ok := s.getBucketGroup(groupID)
 	if !ok {
 		return false // Invalid groupID -> always Blocked
 	}

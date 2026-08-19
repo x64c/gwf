@@ -10,7 +10,6 @@ import (
 	"github.com/x64c/gwf/gw/errs"
 	"github.com/x64c/gwf/gw/kvdbs"
 	"github.com/x64c/gwf/gw/security"
-	"github.com/x64c/gwf/gw/svc"
 	"github.com/x64c/gwf/gw/web/fwupstream"
 	"github.com/x64c/gwf/gw/web/session/caplist"
 	"github.com/x64c/gwf/gw/web/session/lockstore"
@@ -26,30 +25,23 @@ type SessionManager struct {
 	ClientConfs   map[string]*SessionClientConf // keyed by SessionClientConf.ID ("" key valid for clientless)
 	GroupConfs    map[string]*SessionGroupConf  // keyed by group name
 	FWUpstream    *fwupstream.Hub               // upstream subsystem; token I/O delegates here. nil iff this app has no upstream
-	AppName       string
-	KVDB          kvdbs.DB          // holds session rows
-	SessionLocks  *lockstore.Store  // shared with session.Service for per-bucket cap-enforcement locks
-	ParentService svc.StateReporter // the owning session.Service (read-only on State()), for Serving()
+	AppName      string
+	KVDB         kvdbs.DB         // holds session rows
+	SessionLocks *lockstore.Store // shared with session.Service for per-bucket cap-enforcement locks
 
 	enabled atomic.Bool // the bearer protocol's on/off switch (svc.Switchable)
 }
 
 // Enable / Disable / Enabled implement svc.Switchable — the bearer protocol's
-// own on/off switch. Enabled() reports only this switch; whether requests
-// actually serve also depends on the service lifecycle (session.Service.Serving).
+// own on/off switch. Enabled() reports only this switch; whether the SERVICE
+// may be used is not the manager's to answer — the caller's framework handle
+// already did (svc.Service: methods judge no availability). The manager keeps
+// no lifecycle state and no back-pointer to its service on purpose: a Serving()
+// self-verdict here was a second authority beside admission, and the two
+// diverge under abandonment.
 func (m *SessionManager) Enable()       { m.enabled.Store(true) }
 func (m *SessionManager) Disable()      { m.enabled.Store(false) }
 func (m *SessionManager) Enabled() bool { return m.enabled.Load() }
-
-// Serving reports whether the bearer protocol should serve right now: its parent
-// service is RUNNING and its own switch is Enabled. Fail-closed — a nil
-// ParentService (manager not attached to a service) reports false.
-func (m *SessionManager) Serving() bool {
-	if m.ParentService == nil {
-		return false
-	}
-	return m.ParentService.State() == svc.StateRUNNING && m.Enabled()
-}
 
 func (m *SessionManager) SessionRowKey(sessionID string) string {
 	return m.AppName + ":b:" + sessionID
@@ -124,10 +116,6 @@ func (m *SessionManager) CreateSession(
 	group *SessionGroupConf,
 	bindValues map[string]string,
 ) (string, string, string, error) {
-	if !m.Serving() {
-		return "", "", "", errs.SessionServiceUnavailable.WithDetail("bearer session")
-	}
-
 	sessionID := security.GenerateHex(16)
 	accessToken := security.GenerateBase64RawURL(32)
 	refreshToken := security.GenerateBase64RawURL(32)
@@ -287,10 +275,6 @@ func (m *SessionManager) FetchSessionByRefreshToken(ctx context.Context, rawToke
 // ExtendSession rotates the bearer session's access/refresh token pair given a
 // valid refresh token. Returns the new (access, refresh) tokens.
 func (m *SessionManager) ExtendSession(ctx context.Context, refreshToken string) (string, string, *errs.Error) {
-	if !m.Serving() {
-		return "", "", errs.SessionServiceUnavailable.WithDetail("bearer session")
-	}
-
 	// STEP 1: resolve refresh token → sid + umbrella row + group conf
 	refreshHash := security.HashHexSHA256(refreshToken)
 	sid, found, err := m.KVDB.GetValue(ctx, m.RefreshTokenRowKey(refreshHash))

@@ -33,13 +33,8 @@ type Core struct {
 	AppRoot              string                                   `json:"-"`                      // Filled from compiled paths
 	RootCtx              context.Context                          `json:"-"`                      // Global Context with RootCancel
 	RootCancel           context.CancelFunc                       `json:"-"`                      // CancelFunc for RootCtx
-	UDSService           *uds.Service                             `json:"-"`                      // PrepareUDSService
-	JobSchedulerService  *jobsched.Service                        `json:"-"`                      // PrepareJobSchedulerService
 	WebServerConf        web.ServerConf                           `json:"-"`                      // LoadWebServerConf (.web-server.json). Zero when the app runs no web service.
-	WebService           *web.Service                             `json:"-"`                      // PrepareWebService
 	ClientIPResolver     requests.ClientIPResolver                `json:"-"`                      // PrepareWebService — derives the caller's address per the deployment's trusted proxies
-	SessionService       *session.Service                         `json:"-"`                      // PrepareSessionService, PrepareCookieSessions, PrepareBearerSessions
-	ThrottleService      *throttle.Service                        `json:"-"`                      // PrepareThrottleService
 	VolatileKV           *sync.Map                                `json:"-"`                      // map[string]string
 	ActionLocks          *sync.Map                                `json:"-"`                      // map[string]struct{}
 	JwksServiceConf      security.JwksServiceConf                 `json:"-"`                      // LoadJwksServiceConf
@@ -59,6 +54,17 @@ type Core struct {
 	shutdownErr   error          // first error the walk recorded, including an abandoned service
 	shutdownPanic *svcPanicError // first panic the walk recovered; re-raised by WaitServicesTerminated on its caller's goroutine
 	shutdownOnce  sync.Once      // the walk publishes its result exactly once
+
+	// Core's own services, deliberately unexported: an exported raw pointer
+	// was callable behind the admission gate — the escape hatch the gate can't
+	// close (svc.Service: no escape hatches). Every plane has its own path:
+	// boot wiring holds the pointer its Prepare* returned, consumers go
+	// through the *Handle accessors, operators through the node.
+	udsService          *uds.Service      // PrepareUDSService
+	jobSchedulerService *jobsched.Service // PrepareJobSchedulerService
+	webService          *web.Service      // PrepareWebService
+	sessionService      *session.Service  // PrepareSessionService, PrepareCookieSessions, PrepareBearerSessions
+	throttleService     *throttle.Service // PrepareThrottleService
 
 	// Core's own services' nodes, retained at their Prepare* so the *Handle
 	// accessors (core_handles.go) can mint gated references. nil = the app

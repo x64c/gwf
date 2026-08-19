@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-func (s *Service) Cleanup(now time.Time) {
+func (s *Service) cleanup(now time.Time) {
 	log.Printf("[DEBUG][Throttle] cleaning Buckets older than %v", s.cleanupOlderThan)
 	cleanCnt := 0
 	for gid, g := range s.groups {

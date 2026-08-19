@@ -28,8 +28,8 @@ func (s *Service) runOneTimeJob(job *OneTimeJob) {
 		if job.OnFinished != nil {
 			s.runCallback("one-time job", job.ID, "OnFinished", func() { job.OnFinished(err) })
 		}
-		if s.OnOneTimeJobFinished != nil {
-			s.runCallback("one-time job", job.ID, "OnOneTimeJobFinished", func() { s.OnOneTimeJobFinished(job, err) })
+		if s.callbacks.OnOneTimeJobFinished != nil {
+			s.runCallback("one-time job", job.ID, "OnOneTimeJobFinished", func() { s.callbacks.OnOneTimeJobFinished(job, err) })
 		}
 	}()
 }
@@ -63,8 +63,8 @@ func (s *Service) runCronJob(job *CronJob) {
 		if job.OnFinished != nil {
 			s.runCallback("cron job", job.ID, "OnFinished", func() { job.OnFinished(err) })
 		}
-		if s.OnCronJobFinished != nil {
-			s.runCallback("cron job", job.ID, "OnCronJobFinished", func() { s.OnCronJobFinished(job, err) })
+		if s.callbacks.OnCronJobFinished != nil {
+			s.runCallback("cron job", job.ID, "OnCronJobFinished", func() { s.callbacks.OnCronJobFinished(job, err) })
 		}
 	}()
 }

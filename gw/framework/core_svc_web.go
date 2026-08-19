@@ -32,12 +32,12 @@ func (c *Core) LoadWebServerConf() error {
 // service. The conf is taken as an argument rather than read from the Core so
 // the value the server runs on is the value validated here.
 // Call this when all the required services are prepared.
-func (c *Core) PrepareWebService(conf web.ServerConf, httpHandler http.Handler) error {
+func (c *Core) PrepareWebService(conf web.ServerConf, httpHandler http.Handler) (*web.Service, error) {
 	if err := conf.Validate(); err != nil {
-		return err
+		return nil, err
 	}
 	if conf.DrainTimeoutSecs >= c.TerminateTimeoutSecs {
-		return fmt.Errorf("drain_timeout_secs (%d) must be less than terminate_timeout_secs (%d): a full drain could never finish inside the shutdown budget", conf.DrainTimeoutSecs, c.TerminateTimeoutSecs)
+		return nil, fmt.Errorf("drain_timeout_secs (%d) must be less than terminate_timeout_secs (%d): a full drain could never finish inside the shutdown budget", conf.DrainTimeoutSecs, c.TerminateTimeoutSecs)
 	}
 	// Client-address resolution belongs to the web server — logging, audit and
 	// rate limiting all ask for it — so it is prepared here. Trusting nothing is
@@ -49,7 +49,7 @@ func (c *Core) PrepareWebService(conf web.ServerConf, httpHandler http.Handler) 
 	}
 
 	c.WebServerConf = conf
-	c.WebService = web.NewService(httpHandler, conf)
+	c.webService = web.NewService(httpHandler, conf)
 	// The web subsystem ships middleware that may reach for these, and it
 	// cannot know which of it the app actually mounted — the route tree arrives
 	// as an opaque handler. So it declares the POSSIBILITY. Over-declaring
@@ -60,16 +60,16 @@ func (c *Core) PrepareWebService(conf web.ServerConf, httpHandler http.Handler) 
 	// service registered under a name of the app's choosing still matches, and
 	// one the app never prepared contributes no dependency at all.
 	deps := make([]ServiceDep, 0, 2)
-	if c.ThrottleService != nil {
-		deps = append(deps, MayUse(c.ThrottleService.Name()))
+	if c.throttleService != nil {
+		deps = append(deps, MayUse(c.throttleService.Name()))
 	}
-	if c.SessionService != nil {
-		deps = append(deps, MayUse(c.SessionService.Name()))
+	if c.sessionService != nil {
+		deps = append(deps, MayUse(c.sessionService.Name()))
 	}
-	node, err := c.RegisterService(c.WebService, deps...)
+	node, err := c.RegisterService(c.webService, deps...)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	c.webNode = node
-	return nil
+	return c.webService, nil
 }

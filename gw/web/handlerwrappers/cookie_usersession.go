@@ -10,6 +10,7 @@ import (
 	"github.com/x64c/gwf/gw/framework"
 	"github.com/x64c/gwf/gw/kvdbs"
 	"github.com/x64c/gwf/gw/web/responses"
+	"github.com/x64c/gwf/gw/web/session"
 	"github.com/x64c/gwf/gw/web/session/cookie"
 )
 
@@ -38,7 +39,10 @@ type CookieUserSession[UID comparable] struct {
 
 func (m *CookieUserSession[UID]) Wrap(inner http.Handler) (http.Handler, error) {
 	appCore := m.AppProvider().AppCore()
-	sessSvc := appCore.SessionService
+	// Wrap runs at boot, before StartServices admits anything, so the manager
+	// is reached on the NODE plane — the handle would refuse Get() here. The
+	// per-request gate below still asks the handle.
+	sessSvc, _ := appCore.SessionHandle().Node().Service().(*session.Service)
 	if sessSvc == nil || sessSvc.CookieSessionManager == nil {
 		return nil, fmt.Errorf("CookieUserSession: cookie session manager missing — prepare it before wiring this middleware")
 	}

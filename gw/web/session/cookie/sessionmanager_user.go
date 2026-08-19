@@ -38,10 +38,6 @@ func (m *SessionManager) CreateUserSession(ctx context.Context, w http.ResponseW
 // Returns the generated sessionID. The caller is responsible for setting the
 // cookie via SetUserSessionCookie.
 func (m *SessionManager) StoreUserSession(ctx context.Context, uidStr string) (string, error) {
-	if !m.Serving() {
-		return "", errs.SessionServiceUnavailable.WithDetail("cookie user session")
-	}
-
 	sessionID := security.GenerateHex(16)
 	csrfTkn := security.GenerateBase64RawURL(32)
 	slidingExpiration := time.Duration(m.Conf.UserSession.ExpireIn) * time.Second

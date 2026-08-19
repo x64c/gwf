@@ -16,15 +16,15 @@ type Service struct {
 	addr       string             // preserved across cycles for *http.Server rebuild
 	handler    http.Handler       // preserved across cycles
 	conf       ServerConf         // the server recipe (deadlines + drain window), validated by the loader
-	Ctx        context.Context    // per-cycle runtime context (set in Start)
+	ctx        context.Context    // per-cycle runtime context (set in Start)
 	cancel     context.CancelFunc // per-cycle cancel (set in Start)
 	reqCtx     context.Context    // per-cycle; parent of every request ctx — root's values, root's cancellation severed
 	cancelReq  context.CancelFunc // fires when the drain window closes (see run)
-	state      svc.State          // internal service state
+	state      svc.AtomicState    // internal service state (State() may be read concurrently with lifecycle writes)
 	terminated chan error         // one-shot; fires when Terminate completes
 	stopped    chan struct{}      // per-cycle; closed when run goroutine has stopped
 	listener   net.Listener       // per-cycle; bound by Start, so a bind failure fails the start
-	Server     *http.Server       // rebuilt each Start cycle (one-shot after Shutdown)
+	server     *http.Server       // rebuilt each Start cycle (one-shot after Shutdown); unexported — a holder could Shutdown it or swap its handler behind the admission gate
 }
 
 func (s *Service) Name() string {
@@ -32,7 +32,7 @@ func (s *Service) Name() string {
 }
 
 func (s *Service) State() svc.State {
-	return s.state
+	return s.state.Load()
 }
 
 func NewService(httpHandler http.Handler, conf ServerConf) *Service {
@@ -44,14 +44,15 @@ func NewService(httpHandler http.Handler, conf ServerConf) *Service {
 // dependency declarations all refer to, and registration rejects a duplicate.
 // The string is taken raw — uniqueness and legibility are the caller's.
 func NewServiceAs(name string, httpHandler http.Handler, conf ServerConf) *Service {
-	return &Service{
+	s := &Service{
 		name:       name,
 		addr:       conf.Listen,
 		handler:    httpHandler,
 		conf:       conf,
-		state:      svc.StateREADY,
 		terminated: make(chan error, 1),
 	}
+	s.state.Store(svc.StateREADY)
+	return s
 }
 
 // Start : READY → RUNNING. Builds a fresh *http.Server (the previous one is
@@ -68,20 +69,20 @@ func NewServiceAs(name string, httpHandler http.Handler, conf ServerConf) *Servi
 // Atomic on failure: the contexts created above are canceled before returning,
 // so a failed start leaves nothing behind for anyone to clean up.
 func (s *Service) Start(parentCtx context.Context) error {
-	if s.state == svc.StateRUNNING {
+	if s.state.Load() == svc.StateRUNNING {
 		return nil // idempotent
 	}
-	if s.state != svc.StateREADY {
-		return fmt.Errorf("cannot start: state is %v, must be READY", s.state)
+	if s.state.Load() != svc.StateREADY {
+		return fmt.Errorf("cannot start: state is %v, must be READY", s.state.Load())
 	}
 	log.Printf("[INFO][%s] Starting.", s.Name())
-	s.Ctx, s.cancel = context.WithCancel(parentCtx)
+	s.ctx, s.cancel = context.WithCancel(parentCtx)
 	// Request contexts inherit the root's VALUES but not its cancellation:
 	// canceling the root opens the drain, and canceling in-flight work at
 	// that same moment would defeat it. They are canceled when the drain
 	// window closes instead — see run.
 	s.reqCtx, s.cancelReq = context.WithCancel(context.WithoutCancel(parentCtx))
-	s.Server = s.conf.newHTTPServer(s.addr, s.handler, s.reqCtx) // fresh per cycle
+	s.server = s.conf.newHTTPServer(s.addr, s.handler, s.reqCtx) // fresh per cycle
 
 	ln, err := net.Listen("tcp", s.addr)
 	if err != nil {
@@ -91,7 +92,7 @@ func (s *Service) Start(parentCtx context.Context) error {
 	}
 	s.listener = ln                 // fresh per cycle
 	s.stopped = make(chan struct{}) // fresh per cycle
-	s.state = svc.StateRUNNING
+	s.state.Store(svc.StateRUNNING)
 	log.Printf("[INFO][%s] Running. (listening on %s)", s.Name(), s.addr)
 	go s.run()
 	return nil
@@ -101,13 +102,13 @@ func (s *Service) Start(parentCtx context.Context) error {
 // The internal graceful drain uses the conf's drain window; ctx governs only
 // how long Stop waits for the run goroutine to actually exit.
 func (s *Service) Stop(ctx context.Context) error {
-	if s.state == svc.StateREADY {
+	if s.state.Load() == svc.StateREADY {
 		return nil // idempotent
 	}
-	if s.state != svc.StateRUNNING {
-		return fmt.Errorf("cannot stop: state is %v, must be RUNNING", s.state)
+	if s.state.Load() != svc.StateRUNNING {
+		return fmt.Errorf("cannot stop: state is %v, must be RUNNING", s.state.Load())
 	}
-	s.state = svc.StateSTOPPING
+	s.state.Store(svc.StateSTOPPING)
 	return s.stop(ctx)
 }
 
@@ -116,11 +117,11 @@ func (s *Service) Stop(ctx context.Context) error {
 // exit path (deferred send): a missed stop deadline must still report, or
 // WaitServicesTerminated counts N-1 forever and main wedges until SIGKILL.
 func (s *Service) Terminate(ctx context.Context) (err error) {
-	if s.state == svc.StateTERMINATING {
+	if s.state.Load() == svc.StateTERMINATING {
 		return nil // idempotent — returns before the defer arms
 	}
-	prevState := s.state
-	s.state = svc.StateTERMINATING
+	prevState := s.state.Load()
+	s.state.Store(svc.StateTERMINATING)
 	log.Printf("[INFO][%s] Terminating.", s.Name())
 	defer func() {
 		s.terminated <- err // THE ONLY send site; unconditional, exactly once
@@ -174,7 +175,7 @@ func (s *Service) run() {
 	go func() {
 		// Serve, not ListenAndServe: the listener was bound by Start, so by the
 		// time this runs the only failures left are serving failures.
-		if err := s.Server.Serve(s.listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := s.server.Serve(s.listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErr <- err
 		} else {
 			serverErr <- nil
@@ -182,11 +183,11 @@ func (s *Service) run() {
 	}()
 
 	select {
-	case <-s.Ctx.Done():
-		s.Server.SetKeepAlivesEnabled(false)
+	case <-s.ctx.Done():
+		s.server.SetKeepAlivesEnabled(false)
 		gracefulCtx, cancel := context.WithTimeout(context.Background(), s.conf.drainTimeout())
 		defer cancel()
-		if err := s.Server.Shutdown(gracefulCtx); err != nil {
+		if err := s.server.Shutdown(gracefulCtx); err != nil {
 			log.Printf("[ERROR][HTTPServer] shutdown failed: %v", err)
 		}
 		<-serverErr // wait for the Serve goroutine to return
@@ -199,7 +200,7 @@ func (s *Service) run() {
 }
 
 func (s *Service) transitionAfterRun() {
-	if s.state == svc.StateSTOPPING {
-		s.state = svc.StateREADY
+	if s.state.Load() == svc.StateSTOPPING {
+		s.state.Store(svc.StateREADY)
 	}
 }

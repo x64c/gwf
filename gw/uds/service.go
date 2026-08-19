@@ -20,13 +20,19 @@ import (
 )
 
 type Service struct {
-	*CommandStore // [Embedded]
-	Conf          Conf
-	Ctx           context.Context // per-cycle runtime context (set in Start)
+	Conf Conf
+
+	// cmdStore is deliberately NOT embedded-exported: the command registry's
+	// maps are plain (written at construction, read by every connection
+	// goroutine), so an exported mutation path would be a data race as well as
+	// an escape hatch (svc.Service: no escape hatches). The store is complete
+	// when the service is constructed.
+	cmdStore *CommandStore
 
 	name       string             // registered instance identity; see NewServiceAs
+	ctx        context.Context    // per-cycle runtime context (set in Start)
 	cancel     context.CancelFunc // per-cycle cancel (set in Start)
-	state      svc.State          // internal service state
+	state      svc.AtomicState    // internal service state (State() may be read concurrently with lifecycle writes)
 	terminated chan error         // one-shot; fires when Terminate completes
 	stopped    chan struct{}      // per-cycle; closed when run goroutine has stopped
 	listener   net.Listener       // rebuilt each Start cycle
@@ -37,7 +43,7 @@ func (s *Service) Name() string {
 }
 
 func (s *Service) State() svc.State {
-	return s.state
+	return s.state.Load()
 }
 
 func NewService(conf Conf, cmdStore *CommandStore) *Service {
@@ -49,24 +55,25 @@ func NewService(conf Conf, cmdStore *CommandStore) *Service {
 // dependency declarations all refer to, and registration rejects a duplicate.
 // The string is taken raw — uniqueness and legibility are the caller's.
 func NewServiceAs(name string, conf Conf, cmdStore *CommandStore) *Service {
-	return &Service{
-		name:         name,
-		state:        svc.StateREADY,
-		terminated:   make(chan error, 1),
-		Conf:         conf,
-		CommandStore: cmdStore,
+	s := &Service{
+		name:       name,
+		terminated: make(chan error, 1),
+		Conf:       conf,
+		cmdStore:   cmdStore,
 	}
+	s.state.Store(svc.StateREADY)
+	return s
 }
 
 // Start : READY → RUNNING. parentCtx is the runtime cancellation lineage.
 // Bootstrapping errors (listen/chmod failures) are returned immediately.
 // Lifecycle methods (Start/Stop/Terminate) are not safe to call concurrently.
 func (s *Service) Start(parentCtx context.Context) error {
-	if s.state == svc.StateRUNNING {
+	if s.state.Load() == svc.StateRUNNING {
 		return nil // idempotent
 	}
-	if s.state != svc.StateREADY {
-		return fmt.Errorf("cannot start: state is %v, must be READY", s.state)
+	if s.state.Load() != svc.StateREADY {
+		return fmt.Errorf("cannot start: state is %v, must be READY", s.state.Load())
 	}
 	log.Printf("[INFO][%s] Starting.", s.Name())
 	// A file already at the socket path is an abnormality — a live incumbent,
@@ -94,9 +101,9 @@ func (s *Service) Start(parentCtx context.Context) error {
 		return fmt.Errorf("chmod(%q) failed: %w", s.Conf.SocketPath, err)
 	}
 	s.listener = listener
-	s.Ctx, s.cancel = context.WithCancel(parentCtx)
+	s.ctx, s.cancel = context.WithCancel(parentCtx)
 	s.stopped = make(chan struct{}) // fresh per cycle
-	s.state = svc.StateRUNNING
+	s.state.Store(svc.StateRUNNING)
 	log.Printf("[INFO][%s] Running. (listening on %q)", s.Name(), s.Conf.SocketPath)
 	go s.run()
 	return nil
@@ -142,24 +149,24 @@ func refuseOccupiedPath(path string) error {
 
 // Stop : RUNNING → STOPPING → READY. Synchronous on the run goroutine's exit.
 func (s *Service) Stop(ctx context.Context) error {
-	if s.state == svc.StateREADY {
+	if s.state.Load() == svc.StateREADY {
 		return nil // idempotent
 	}
-	if s.state != svc.StateRUNNING {
-		return fmt.Errorf("cannot stop: state is %v, must be RUNNING", s.state)
+	if s.state.Load() != svc.StateRUNNING {
+		return fmt.Errorf("cannot stop: state is %v, must be RUNNING", s.state.Load())
 	}
-	s.state = svc.StateSTOPPING
+	s.state.Store(svc.StateSTOPPING)
 	return s.stop(ctx)
 }
 
 // Terminate : any → TERMINATING (irreversible). If RUNNING, full stop;
 // if STOPPING, just wait for run goroutine to exit. Fires Terminated.
 func (s *Service) Terminate(ctx context.Context) (err error) {
-	if s.state == svc.StateTERMINATING {
+	if s.state.Load() == svc.StateTERMINATING {
 		return nil // idempotent — returns before the defer arms
 	}
-	prevState := s.state
-	s.state = svc.StateTERMINATING
+	prevState := s.state.Load()
+	s.state.Store(svc.StateTERMINATING)
 	log.Printf("[INFO][%s] Terminating.", s.Name())
 	defer func() {
 		s.terminated <- err // THE ONLY send site; unconditional, exactly once
@@ -207,7 +214,7 @@ func (s *Service) run() {
 
 	// goroutine to clean up when context is done
 	go func() {
-		<-s.Ctx.Done()
+		<-s.ctx.Done()
 		if err := s.listener.Close(); err != nil {
 			log.Printf("[ERROR][%s] cannot close socket (listener): %v", s.Name(), err)
 		}
@@ -234,8 +241,8 @@ func (s *Service) run() {
 }
 
 func (s *Service) transitionAfterRun() {
-	if s.state == svc.StateSTOPPING {
-		s.state = svc.StateREADY
+	if s.state.Load() == svc.StateSTOPPING {
+		s.state.Store(svc.StateREADY)
 	}
 }
 
@@ -272,7 +279,7 @@ func (s *Service) handleConn(c net.Conn) {
 	log.Printf("[INFO][%s] client connected [%s]", s.Name(), peer)
 
 	go func() {
-		<-s.Ctx.Done()
+		<-s.ctx.Done()
 		_ = c.Close()
 	}()
 
@@ -313,11 +320,11 @@ func (s *Service) handleConn(c net.Conn) {
 			return
 		}
 		if cmdStr == "h" || cmdStr == "help" {
-			s.CommandStore.PrintHelp(c)
+			s.cmdStore.PrintHelp(c)
 			continue
 		}
 		// look it up in the command map
-		if handler, ok := s.GetHandler(cmdStr); ok {
+		if handler, ok := s.cmdStore.GetHandler(cmdStr); ok {
 			log.Printf("[INFO][%s] [%s] `%s`\n", s.Name(), peer, line)
 			_, _ = fmt.Fprintln(c)
 			panicked, err := s.runHandler(handler, args[1:], c, peer, line)

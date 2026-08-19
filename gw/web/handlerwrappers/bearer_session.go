@@ -7,6 +7,7 @@ import (
 	"github.com/x64c/gwf/gw/errs"
 	"github.com/x64c/gwf/gw/framework"
 	"github.com/x64c/gwf/gw/web/responses"
+	"github.com/x64c/gwf/gw/web/session"
 )
 
 // BearerSession gates an endpoint on the bearer session protocol being in
@@ -26,7 +27,10 @@ type BearerSession struct {
 
 func (m *BearerSession) Wrap(inner http.Handler) (http.Handler, error) {
 	appCore := m.AppProvider().AppCore()
-	sessSvc := appCore.SessionService
+	// Wrap runs at boot, before StartServices admits anything, so the manager
+	// is reached on the NODE plane — the handle would refuse Get() here. The
+	// per-request gate below still asks the handle.
+	sessSvc, _ := appCore.SessionHandle().Node().Service().(*session.Service)
 	if sessSvc == nil || sessSvc.BearerSessionManager == nil {
 		return nil, fmt.Errorf("BearerSession: bearer session manager missing — prepare it before wiring this middleware")
 	}
