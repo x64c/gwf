@@ -5,6 +5,7 @@ import (
 	"io"
 
 	"github.com/x64c/gwf/gw/framework"
+	"github.com/x64c/gwf/gw/throttle"
 )
 
 type ThrottlePrintBuckets struct {
@@ -29,9 +30,11 @@ func (h *ThrottlePrintBuckets) Usage() string {
 
 func (h *ThrottlePrintBuckets) HandleCommand(_ []string, w io.Writer) error {
 	appCore := h.AppProvider().AppCore()
-	throttleBucketStore := appCore.ThrottleService
-	if throttleBucketStore == nil {
-		return fmt.Errorf("throttle bucket store not ready")
+	// Node-plane typed reach: inspection must work on a stopped service too —
+	// the buckets are passive state and survive Stop.
+	throttleBucketStore, ok := appCore.ThrottleHandle().Node().Service().(*throttle.Service)
+	if !ok {
+		return fmt.Errorf("throttle service not configured in this app")
 	}
 	keyMap := throttleBucketStore.Inspect()
 	for groupID, localIDs := range keyMap {

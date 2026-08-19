@@ -44,7 +44,13 @@ func (h *JobCronLogEvery5Min) HandleCommand(args []string, w io.Writer) error {
 		return nil
 	}
 	appCore := h.AppProvider().AppCore()
-	err := appCore.JobSchedulerService.AddCronJob(cronjob)
+	// Registering a job is a CONSUMER use, so it goes through the gate: an
+	// un-admitted scheduler refuses instead of quietly queuing work.
+	jobSched, ok := appCore.JobSchedulerHandle().Get()
+	if !ok {
+		return fmt.Errorf("job scheduler service unavailable")
+	}
+	err := jobSched.AddCronJob(cronjob)
 	if err != nil {
 		return err
 	}

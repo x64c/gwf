@@ -29,10 +29,12 @@ func (h *UDS) Handle(subcmd string, args []string, w io.Writer) error {
 		return fmt.Errorf("refusing to stop UDS over UDS — it would close your own connection; pass --force to override (recover via another transport)")
 	}
 	appCore := h.AppProvider().AppCore()
-	if appCore.UDSService == nil {
+	n := appCore.UDSHandle().Node()
+	if n.Service() == nil {
+		// the absent-handle node: this app never prepared the service
 		return fmt.Errorf("%s service not configured in this app", h.Name())
 	}
-	return handleLifecycle(appCore, appCore.UDSHandle().Node(), subcmd, args, w)
+	return handleLifecycle(appCore, n, subcmd, args, w)
 }
 
 func hasForce(args []string) bool {

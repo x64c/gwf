@@ -53,7 +53,13 @@ func (h *JobOnetimeLogAfter) HandleCommand(args []string, w io.Writer) error {
 		},
 	}
 	appCore := h.AppProvider().AppCore()
-	err = appCore.JobSchedulerService.AddOneTimeJob(job)
+	// Registering a job is a CONSUMER use, so it goes through the gate: an
+	// un-admitted scheduler refuses instead of quietly queuing work.
+	jobSched, ok := appCore.JobSchedulerHandle().Get()
+	if !ok {
+		return fmt.Errorf("job scheduler service unavailable")
+	}
+	err = jobSched.AddOneTimeJob(job)
 	if err != nil {
 		return err
 	}

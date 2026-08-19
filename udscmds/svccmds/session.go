@@ -31,11 +31,16 @@ func (h *Session) Usage() string {
 
 func (h *Session) Handle(subcmd string, args []string, w io.Writer) error {
 	appCore := h.AppProvider().AppCore()
-	s := appCore.SessionService
-	if s == nil {
+	node := appCore.SessionHandle().Node()
+	// Typed reach on the NODE plane: operator commands act on services
+	// regardless of admission (inspecting or switching a stopped service is
+	// the point), so the type comes back from the node by assertion — the
+	// node is already the operator's object, and an absent service fails the
+	// assertion cleanly.
+	s, ok := node.Service().(*session.Service)
+	if !ok {
 		return fmt.Errorf("%s service not configured in this app", h.Name())
 	}
-	node := appCore.SessionHandle().Node()
 	switch subcmd {
 	case "start", "stop":
 		// Lifecycle goes through Core's operator ops so admission follows the

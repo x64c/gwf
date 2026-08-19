@@ -23,8 +23,10 @@ func (h *JobSched) Rename(name string) { h.name = name }
 func (h *JobSched) Usage() string      { return lifecycleUsage }
 func (h *JobSched) Handle(subcmd string, args []string, w io.Writer) error {
 	appCore := h.AppProvider().AppCore()
-	if appCore.JobSchedulerService == nil {
+	n := appCore.JobSchedulerHandle().Node()
+	if n.Service() == nil {
+		// the absent-handle node: this app never prepared the service
 		return fmt.Errorf("%s service not configured in this app", h.Name())
 	}
-	return handleLifecycle(appCore, appCore.JobSchedulerHandle().Node(), subcmd, args, w)
+	return handleLifecycle(appCore, n, subcmd, args, w)
 }
