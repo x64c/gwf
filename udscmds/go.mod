@@ -1,8 +1,8 @@
 module github.com/x64c/gwf/udscmds
 
-go 1.26.6
+go 1.27.0
 
-require github.com/x64c/gwf/gw v0.6.9
+require github.com/x64c/gwf/gw v0.7.0
 
 require (
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect

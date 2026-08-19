@@ -22,5 +22,5 @@ github.com/aws/aws-sdk-go-v2/service/s3 v1.107.2 h1:GNU0/xtPEXMKilJZ/a8BedeuQnvu
 github.com/aws/aws-sdk-go-v2/service/s3 v1.107.2/go.mod h1:4jYWUecEsQtE73jPl7p3jrbYXH5ffcR4gegyCygagfg=
 github.com/aws/smithy-go v1.27.8 h1:FR0dxZfIlV7Z8eh2iHfIofdunw382XsDV3Mxt9nUvRY=
 github.com/aws/smithy-go v1.27.8/go.mod h1:YE2RhdIuDbA5E5bTdciG9KrW3+TiEONeUWCqxX9i1Fc=
-github.com/x64c/gwf/gw v0.6.9 h1:9obkRzIAM5bAQbpy3w2tSIkqNtaEhI4UW4G5Iy3PGNQ=
-github.com/x64c/gwf/gw v0.6.9/go.mod h1:g3KwKPjW9ZpATRC0QMOnnPEW0QQKKrZV6JnBYXKbbkI=
+github.com/x64c/gwf/gw v0.7.0 h1:jlgCo3rVLFSsS5VDU+LsLP+BXdGsssAcjAdZktO1cfY=
+github.com/x64c/gwf/gw v0.7.0/go.mod h1:AWkBOaiM0apGCZtVX7hlbtq1Z3t2rwx40LmCkns6o6A=

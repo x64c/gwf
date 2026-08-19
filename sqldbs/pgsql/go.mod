@@ -1,10 +1,10 @@
 module github.com/x64c/gwf/sqldbs/pgsql
 
-go 1.26.6
+go 1.27.0
 
 require (
 	github.com/jackc/pgx/v5 v5.10.0
-	github.com/x64c/gwf/gw v0.6.9
+	github.com/x64c/gwf/gw v0.7.0
 )
 
 require (
