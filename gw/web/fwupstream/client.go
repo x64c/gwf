@@ -25,14 +25,14 @@ type Client struct {
 // the Client. Intended for use by session packages providing typed setters;
 // not called by app code directly. V is preserved at retrieval time via
 // GetRefreshSideloader[V].
-func SetRefreshSideloader[V any](c *Client, key any, val V) {
+func (c *Client) SetRefreshSideloader[V any](key any, val V) {
 	c.refreshSideloaders.Store(key, val)
 }
 
 // GetRefreshSideloader retrieves a typed refresh-sideloader previously stored
 // under key. Returns the zero value and false if no sideloader is registered.
 // Intended for use by session packages providing typed getters.
-func GetRefreshSideloader[V any](c *Client, key any) (V, bool) {
+func (c *Client) GetRefreshSideloader[V any](key any) (V, bool) {
 	var zero V
 	v, ok := c.refreshSideloaders.Load(key)
 	if !ok {

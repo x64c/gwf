@@ -31,7 +31,7 @@ func LoadDBModelBelongsTo[
 	*coll.Collection[PP, PID],
 	error,
 ) {
-	fKeysAsAny := coll.CollectUniqueToSlice(children, func(c CP) any { return foreignKey(c) })
+	fKeysAsAny := children.CollectUniqueToSlice(func(c CP) any { return foreignKey(c) })
 	if len(fKeysAsAny) == 0 {
 		return coll.NewEmptyOrderedCollection[PP, PID](), nil
 	}
@@ -44,7 +44,7 @@ func LoadDBModelBelongsTo[
 	if err != nil {
 		return nil, err
 	}
-	err = coll.LinkBelongsTo[CP, CID, PP, PID](children, parents, foreignKey, relationFieldPtr)
+	err = children.LinkBelongsTo(parents, foreignKey, relationFieldPtr)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +75,7 @@ func LoadDBModelOptionalBelongsTo[
 	*coll.Collection[PP, PID],
 	error,
 ) {
-	fKeysAsAny := coll.CollectUniqueToSliceWithSkip(children,
+	fKeysAsAny := children.CollectUniqueToSliceWithSkip(
 		func(c CP) any {
 			ptr := foreignKeyFieldPtr(c)
 			if ptr == nil {
@@ -97,7 +97,7 @@ func LoadDBModelOptionalBelongsTo[
 	if err != nil {
 		return nil, err
 	}
-	coll.LinkOptionalBelongsTo[CP, CID, PP, PID](children, parents, foreignKeyFieldPtr, relationFieldPtr)
+	children.LinkOptionalBelongsTo(parents, foreignKeyFieldPtr, relationFieldPtr)
 	return parents, nil
 }
 
@@ -155,12 +155,7 @@ func LoadDBModelHasMany[
 	if err != nil {
 		return nil, err
 	}
-	coll.LinkHasMany[PP, PID, CP, CID](
-		parents,
-		children,
-		foreignKey,
-		relationFieldPtr,
-	)
+	parents.LinkHasMany(children, foreignKey, relationFieldPtr)
 	return children, nil
 }
 
@@ -195,12 +190,7 @@ func LoadDBModelHasManyQueryOpts[
 	if err != nil {
 		return nil, err
 	}
-	coll.LinkHasMany[PP, PID, CP, CID](
-		parents,
-		children,
-		foreignKey,
-		relationFieldPtr,
-	)
+	parents.LinkHasMany(children, foreignKey, relationFieldPtr)
 	return children, nil
 }
 

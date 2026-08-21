@@ -10,13 +10,10 @@ import (
 // ForeignKeyField is on the Child
 // RelationField is on the Child
 // Optional Version
-func LinkOptionalBelongsTo[
-	CP model.Identifiable[CID],
-	CID comparable,
+func (children *Collection[CP, CID]) LinkOptionalBelongsTo[
 	PP model.Identifiable[PID],
 	PID comparable,
 ](
-	children *Collection[CP, CID],
 	parents *Collection[PP, PID],
 	foreignKeyFieldPtr func(CP) *PID, // on the child
 	relationFieldPtr func(CP) *PP, // on the child
@@ -36,13 +33,10 @@ func LinkOptionalBelongsTo[
 // LinkBelongsTo - Strict Version
 // ForeignKeyField is on the Child
 // RelationField is on the Child
-func LinkBelongsTo[
-	CP model.Identifiable[CID],
-	CID comparable,
+func (children *Collection[CP, CID]) LinkBelongsTo[
 	PP model.Identifiable[PID],
 	PID comparable,
 ](
-	children *Collection[CP, CID],
 	parents *Collection[PP, PID],
 	foreignKey func(CP) PID, // on the child
 	relationFieldPtr func(CP) *PP, // on the child
@@ -64,13 +58,10 @@ func LinkBelongsTo[
 // LinkHasMany connects ParentCollection-ChildCollection where a Parent-HasMany-Children
 // ForeignKeyField is on the Child
 // RelationField (a Slice) is on the Parent
-func LinkHasMany[
-	PP model.Identifiable[PID],
-	PID comparable,
+func (parents *Collection[PP, PID]) LinkHasMany[
 	CP model.Identifiable[CID],
 	CID comparable,
 ](
-	parents *Collection[PP, PID],
 	children *Collection[CP, CID],
 	foreignKey func(CP) PID, // on the child
 	relationFieldPtr func(PP) **Collection[CP, CID], // on the parent

@@ -21,13 +21,13 @@ type userRefreshSideloaderKey struct{}
 // UserSessionData type. The UID type parameter must match the app's chosen
 // UID type.
 func SetUserRefreshSideloader[UID comparable](c *fwupstream.Client, fn UserRefreshSideloader[UID]) {
-	fwupstream.SetRefreshSideloader(c, userRefreshSideloaderKey{}, fn)
+	c.SetRefreshSideloader(userRefreshSideloaderKey{}, fn)
 }
 
 // GetUserRefreshSideloader retrieves the refresh sideloader registered on c
 // for the bearer UserSessionData type.
 func GetUserRefreshSideloader[UID comparable](c *fwupstream.Client) (UserRefreshSideloader[UID], bool) {
-	return fwupstream.GetRefreshSideloader[UserRefreshSideloader[UID]](c, userRefreshSideloaderKey{})
+	return c.GetRefreshSideloader[UserRefreshSideloader[UID]](userRefreshSideloaderKey{})
 }
 
 // UserlessRefreshSideloader returns extra body fields to merge into the
@@ -44,11 +44,11 @@ type userlessRefreshSideloaderKey struct{}
 // SetUserlessRefreshSideloader registers a refresh sideloader on c for the
 // bearer UserlessSessionData type.
 func SetUserlessRefreshSideloader(c *fwupstream.Client, fn UserlessRefreshSideloader) {
-	fwupstream.SetRefreshSideloader(c, userlessRefreshSideloaderKey{}, fn)
+	c.SetRefreshSideloader(userlessRefreshSideloaderKey{}, fn)
 }
 
 // GetUserlessRefreshSideloader retrieves the refresh sideloader registered on
 // c for the bearer UserlessSessionData type.
 func GetUserlessRefreshSideloader(c *fwupstream.Client) (UserlessRefreshSideloader, bool) {
-	return fwupstream.GetRefreshSideloader[UserlessRefreshSideloader](c, userlessRefreshSideloaderKey{})
+	return c.GetRefreshSideloader[UserlessRefreshSideloader](userlessRefreshSideloaderKey{})
 }

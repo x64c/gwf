@@ -4,13 +4,10 @@ import "github.com/x64c/gwf/gw/model"
 
 // Flatten collects sub-collections from each item into a single flat collection.
 // Duplicates (by ID) are skipped. O(total children) — each child visited once despite the nested loops.
-func Flatten[
-	SP model.Identifiable[SID],
-	SID comparable,
+func (src *Collection[SP, SID]) Flatten[
 	TP model.Identifiable[TID],
 	TID comparable,
 ](
-	src *Collection[SP, SID],
 	extract func(SP) *Collection[TP, TID],
 ) *Collection[TP, TID] {
 	result := NewEmptyOrderedCollection[TP, TID]()

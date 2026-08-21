@@ -21,13 +21,13 @@ type userRefreshSideloaderKey struct{}
 // UserSessionData type. The UID type parameter must match the app's chosen
 // UID type.
 func SetUserRefreshSideloader[UID comparable](c *fwupstream.Client, fn UserRefreshSideloader[UID]) {
-	fwupstream.SetRefreshSideloader(c, userRefreshSideloaderKey{}, fn)
+	c.SetRefreshSideloader(userRefreshSideloaderKey{}, fn)
 }
 
 // GetUserRefreshSideloader retrieves the refresh sideloader registered on c
 // for the cookie UserSessionData type.
 func GetUserRefreshSideloader[UID comparable](c *fwupstream.Client) (UserRefreshSideloader[UID], bool) {
-	return fwupstream.GetRefreshSideloader[UserRefreshSideloader[UID]](c, userRefreshSideloaderKey{})
+	return c.GetRefreshSideloader[UserRefreshSideloader[UID]](userRefreshSideloaderKey{})
 }
 
 // AnonymousRefreshSideloader returns extra body fields to merge into the
@@ -44,11 +44,11 @@ type anonymousRefreshSideloaderKey struct{}
 // SetAnonymousRefreshSideloader registers a refresh sideloader on c for the
 // cookie AnonymousSessionData type.
 func SetAnonymousRefreshSideloader(c *fwupstream.Client, fn AnonymousRefreshSideloader) {
-	fwupstream.SetRefreshSideloader(c, anonymousRefreshSideloaderKey{}, fn)
+	c.SetRefreshSideloader(anonymousRefreshSideloaderKey{}, fn)
 }
 
 // GetAnonymousRefreshSideloader retrieves the refresh sideloader registered
 // on c for the cookie AnonymousSessionData type.
 func GetAnonymousRefreshSideloader(c *fwupstream.Client) (AnonymousRefreshSideloader, bool) {
-	return fwupstream.GetRefreshSideloader[AnonymousRefreshSideloader](c, anonymousRefreshSideloaderKey{})
+	return c.GetRefreshSideloader[AnonymousRefreshSideloader](anonymousRefreshSideloaderKey{})
 }

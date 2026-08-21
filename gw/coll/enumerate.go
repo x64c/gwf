@@ -5,12 +5,7 @@ import "github.com/x64c/gwf/gw/model"
 // EnumerateToSlice iterates over every model in the collection and calls yield for each.
 // Every model contributes exactly one value. No skipping.
 // Conceptually equivalent to: [yield(m) for m in c].
-func EnumerateToSlice[
-	MP model.Identifiable[ID],
-	ID comparable,
-	V any,
-](
-	c *Collection[MP, ID],
+func (c *Collection[MP, ID]) EnumerateToSlice[V any](
 	yield func(MP) V,
 ) []V {
 	size := c.Len()
@@ -38,13 +33,7 @@ func EnumerateToSlice[
 // EnumerateToMap iterates over every model in the collection and calls yield for each.
 // Every model contributes exactly one key–value pair. No skipping.
 // Conceptually equivalent to: {k: v for m in c}.
-func EnumerateToMap[
-	MP model.Identifiable[ID],
-	ID comparable,
-	K comparable,
-	V any,
-](
-	c *Collection[MP, ID],
+func (c *Collection[MP, ID]) EnumerateToMap[K comparable, V any](
 	yield func(MP) (K, V),
 ) map[K]V {
 	m := make(map[K]V, c.Len()) // new map
@@ -59,12 +48,7 @@ func EnumerateToMap[
 // If yield returns nil, the element is skipped (conditional yield).
 // Returns a slice of yielded values.
 // Equivalent to a list comprehension: [yield(m) for m in c if yield(m) != nil].
-func CollectToSlice[
-	MP model.Identifiable[ID],
-	ID comparable,
-	V any,
-](
-	c *Collection[MP, ID],
+func (c *Collection[MP, ID]) CollectToSlice[V any](
 	yield func(MP) *V,
 ) []V {
 	sl := make([]V, 0, c.Len()) // new slice
@@ -80,13 +64,7 @@ func CollectToSlice[
 // If yield returns nil, the element is skipped (conditional yield).
 // The yielded key–value pair determines each map entry.
 // ToDo: Review Wrong Result due to Pointer Caching
-func CollectToMap[
-	MP model.Identifiable[ID],
-	ID comparable,
-	K comparable,
-	V any,
-](
-	c *Collection[MP, ID],
+func (c *Collection[MP, ID]) CollectToMap[K comparable, V any](
 	yield func(MP) (*K, *V),
 ) map[K]V {
 	m := make(map[K]V, c.Len()) // new map
@@ -98,12 +76,7 @@ func CollectToMap[
 	return m
 }
 
-func CollectUniqueToSlice[
-	MP model.Identifiable[ID],
-	ID comparable,
-	V comparable,
-](
-	c *Collection[MP, ID],
+func (c *Collection[MP, ID]) CollectUniqueToSlice[V comparable](
 	yield func(MP) V,
 ) []V {
 	sl := make([]V, 0, c.Len())
@@ -134,12 +107,7 @@ func CollectUniqueToSlice[
 	return sl
 }
 
-func CollectUniqueToSliceWithSkip[
-	MP model.Identifiable[ID],
-	ID comparable,
-	V comparable,
-](
-	c *Collection[MP, ID],
+func (c *Collection[MP, ID]) CollectUniqueToSliceWithSkip[V comparable](
 	yield func(MP) V,
 	skip func(V) bool, // nil = no skip rule
 ) []V {
@@ -182,13 +150,10 @@ func CollectUniqueToSliceWithSkip[
 // by applying yield to each entity in the source collection.
 // If yield returns nil, that entity is skipped.
 // The resulting collection does not preserve iteration order.
-func BuildUnorderedCollectionFrom[
-	SP model.Identifiable[SID],
-	SID comparable,
+func (src *Collection[SP, SID]) BuildUnorderedCollectionFrom[
 	NP model.Identifiable[NID],
 	NID comparable,
 ](
-	src *Collection[SP, SID],
 	yield func(SP) NP,
 	skip func(NP) bool,
 ) *Collection[NP, NID] {
@@ -217,13 +182,10 @@ func BuildUnorderedCollectionFrom[
 // by applying yield to each entity in the source collection.
 // If yield returns nil, that entity is skipped.
 // The resulting collection preserves the iteration order of src.
-func BuildOrderedCollectionFrom[
-	SP model.Identifiable[SID],
-	SID comparable,
+func (src *Collection[SP, SID]) BuildOrderedCollectionFrom[
 	NP model.Identifiable[NID],
 	NID comparable,
 ](
-	src *Collection[SP, SID],
 	yield func(SP) NP,
 	skip func(NP) bool,
 ) *Collection[NP, NID] {
