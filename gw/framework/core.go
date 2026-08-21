@@ -140,6 +140,7 @@ func (c *Core) StartServices() error {
 	log.Printf("[INFO] starting all services (%d, in %d dependency levels)", len(c.serviceGraph.nodes), len(levels))
 	c.shutdownDone = make(chan struct{})
 	started := make([]*ServiceNode, 0, len(c.serviceGraph.nodes))
+	// inline slices.Backward
 	for i := len(levels) - 1; i >= 0; i-- {
 		for _, n := range levels[i] {
 			if err := startNode(n, c.RootCtx); err != nil {
@@ -147,8 +148,7 @@ func (c *Core) StartServices() error {
 				// A panicking Start continues as a panic — after the rollback
 				// this frame owes. Start is called on this goroutine, so the
 				// re-raise lands on StartServices' caller directly.
-				var sp *svcPanicError
-				if errors.As(err, &sp) {
+				if sp, ok := errors.AsType[*svcPanicError](err); ok {
 					panic(sp.val)
 				}
 				return err
@@ -211,6 +211,7 @@ func (c *Core) rollbackStarted(started []*ServiceNode, failed *ServiceNode, caus
 		return
 	}
 	log.Printf("[INFO] boot rollback: tearing down %d already-started service(s)", len(started))
+	// inline slices.Backward
 	for i := len(started) - 1; i >= 0; i-- {
 		if err := c.terminateNode(started[i]); err != nil {
 			log.Printf("[ERROR] boot rollback: %v", err)
@@ -314,8 +315,7 @@ func (c *Core) TerminateServices() {
 			if err != nil && firstErr == nil {
 				firstErr = err
 			}
-			var sp *svcPanicError
-			if errors.As(err, &sp) && c.shutdownPanic == nil {
+			if sp, ok := errors.AsType[*svcPanicError](err); ok && c.shutdownPanic == nil {
 				c.shutdownPanic = sp // first panic wins; later ones stay node errors, already logged with their stacks
 			}
 		}

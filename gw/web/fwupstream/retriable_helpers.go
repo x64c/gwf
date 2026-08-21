@@ -33,6 +33,7 @@ func RequestJSON(
 ) (*http.Response, int, *errs.Error) {
 	actual := &RequestPayload{Headers: http.Header{}}
 	if payload != nil {
+		// inline maps.Copy
 		for k, vs := range payload.Headers {
 			actual.Headers[k] = vs
 		}
@@ -76,6 +77,7 @@ func RequestPDF(
 ) (*http.Response, int, *errs.Error) {
 	actual := &RequestPayload{Headers: http.Header{}}
 	if payload != nil {
+		// inline maps.Copy
 		for k, vs := range payload.Headers {
 			actual.Headers[k] = vs
 		}

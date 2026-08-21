@@ -79,6 +79,7 @@ func (g *RouteGroup) Handle(subpattern string, handler http.Handler, handlerWrap
 	// log.Fatal: stdlib parity (http.ServeMux.Handle panics on a bad pattern),
 	// defers run, a host can recover, and the path is testable.
 	wrappedHandler := handler
+	// inline slices.Backward
 	for i := len(handlerWrappers) - 1; i >= 0; i-- {
 		wrapped, err := handlerWrappers[i].Wrap(wrappedHandler)
 		if err != nil {
@@ -86,6 +87,7 @@ func (g *RouteGroup) Handle(subpattern string, handler http.Handler, handlerWrap
 		}
 		wrappedHandler = wrapped
 	}
+	// inline slices.Backward
 	for i := len(g.HandlerWrappers) - 1; i >= 0; i-- {
 		wrapped, err := g.HandlerWrappers[i].Wrap(wrappedHandler)
 		if err != nil {

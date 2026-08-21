@@ -62,8 +62,7 @@ func (h *EchoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	limited := http.MaxBytesReader(w, r.Body, h.MaxMemoryMB<<20)
 	rBodyBytes, err := io.ReadAll(limited)
 	if err != nil {
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
+		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 			responses.WriteErrorJSON(w, http.StatusRequestEntityTooLarge, errs.RequestBodyTooLarge)
 			return
 		}

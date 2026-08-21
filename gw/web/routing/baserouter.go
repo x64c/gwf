@@ -22,6 +22,7 @@ func (r *BaseRouter) Handle(pattern string, handler http.Handler, handlerWrapper
 	// design. See RouteGroup.Handle for the reasoning (stdlib parity,
 	// boot-time fail-fast).
 	wrappedHandler := handler
+	// inline slices.Backward
 	for i := len(handlerWrappers) - 1; i >= 0; i-- {
 		wrapped, err := handlerWrappers[i].Wrap(wrappedHandler)
 		if err != nil {

@@ -54,7 +54,7 @@ func GenerateRSASignedJWTIDToken(iss string, sub string, email string, clientID 
 func VerifyRSASignedIDToken(signedToken string, pubKey *rsa.PublicKey, expectedAud string, expectedIss string) (jwt.MapClaims, error) {
 	parsedToken, err := jwt.Parse(
 		signedToken,
-		func(token *jwt.Token) (interface{}, error) {
+		func(token *jwt.Token) (any, error) {
 			if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
 				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 			}

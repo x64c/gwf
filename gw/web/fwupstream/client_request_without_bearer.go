@@ -48,6 +48,7 @@ func (c *Client) RequestWithoutBearer(
 	req.Header.Set("Content-Type", "application/json")
 	// Layer 2: caller's headers.
 	if payload != nil {
+		// inline maps.Copy
 		for k, vs := range payload.Headers {
 			req.Header[k] = vs
 		}

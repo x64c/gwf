@@ -66,6 +66,7 @@ func (rs ClientIPResolver) ClientIP(r *http.Request) string {
 	// proxy recorded for us.
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		parts := strings.Split(xff, ",")
+		// inline slices.Backward
 		for i := len(parts) - 1; i >= 0; i-- {
 			ip, err := netip.ParseAddr(strings.TrimSpace(parts[i]))
 			if err != nil {
