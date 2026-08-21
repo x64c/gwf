@@ -3,6 +3,7 @@ package svccmds
 import (
 	"fmt"
 	"io"
+	"slices"
 
 	"github.com/x64c/gwf/gw/framework"
 )
@@ -38,10 +39,5 @@ func (h *UDS) Handle(subcmd string, args []string, w io.Writer) error {
 }
 
 func hasForce(args []string) bool {
-	for _, a := range args {
-		if a == "--force" {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(args, "--force")
 }
