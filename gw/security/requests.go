@@ -3,7 +3,9 @@ package security
 type AuthRequestBody struct {
 	AuthClientID string `json:"auth_client_id"`
 	Code         string `json:"code"`
-	RedirectURI  string `json:"redirect_uri"` // Required for Security Check. RFC 6749 §4.1.3
+	RedirectURI  string `json:"redirect_uri"`  // Required for Security Check. RFC 6749 §4.1.3
+	Nonce        string `json:"nonce"`         // issued by the initiating side; echoed inside the ID token
+	PKCEVerifier string `json:"pkce_verifier"` // issued by the initiating side; proven at code exchange
 }
 
 type RefreshAccessTokenRequestBody struct {

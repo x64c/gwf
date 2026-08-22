@@ -40,8 +40,7 @@ type SessionCapConf struct {
 // the entire config, all ID values are globally unique — duplicate IDs are a
 // fatal boot error.
 type SessionClientConf struct {
-	Name          string            `json:"-"`               // populated from JSON clients-map key at boot; for diagnostics
-	ID            string            `json:"id"`              // Client-Id header value; "" = clientless
-	ExtAuthSecret string            `json:"ext_auth_secret"` // external auth provider secret (OAuth client secret, etc.), carried for the application's own verifier code — the framework does not read or enforce it
-	Group         *SessionGroupConf `json:"-"`               // back-ref to parent group, set at boot
+	Name  string            `json:"-"`  // populated from JSON clients-map key at boot; for diagnostics
+	ID    string            `json:"id"` // Client-Id header value; "" = clientless
+	Group *SessionGroupConf `json:"-"`  // back-ref to parent group, set at boot
 }

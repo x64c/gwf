@@ -43,7 +43,7 @@ var (
 
 	// Auth
 
-	InvalidOAuthState = &Error{Name: "InvalidOAuthState", Code: 1300, Message: "invalid OAuth state"}
+	InvalidFlowTicket = &Error{Name: "InvalidFlowTicket", Code: 1300, Message: "invalid auth flow ticket"}
 	UserNotFound      = &Error{Name: "UserNotFound", Code: 1310, Message: "user not found"}
 	UserDisabled      = &Error{Name: "UserDisabled", Code: 1311, Message: "user disabled"}
 
