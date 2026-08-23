@@ -19,8 +19,8 @@ import (
 
 const Method authn.Method = "oidc"
 
-// Provider describes one OIDC identity provider. Every field is explicit
-// configuration — nothing is defaulted. Call Validate at boot.
+// Provider describes one OIDC identity provider, entirely by configuration.
+// Call Validate at boot.
 //
 // The zero-value internals carry a JWKS cache; use a Provider as a single
 // long-lived *Provider, not by copy.
