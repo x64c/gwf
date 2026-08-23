@@ -9,8 +9,27 @@ import (
 	"github.com/x64c/gwf/gw/errs"
 )
 
-// The DBModel query functions. sqlSelectBase must be clean of WHERE and
-// bindings, and its column order must match the model's binding order.
+// The DBModel query functions. The SELECT is derived from the model: its
+// Table names the table, its ColumnFieldBindings name the columns in scan
+// order.
+
+// SelectBaseOf builds "SELECT <bound columns, binding order> FROM <table>"
+// for the model — the derivation FetchDBModel makes — with identifiers quoted
+// by the client. The bound columns are Choose-validated against the Table.
+func SelectBaseOf[M any, MP DBModel[M]](c Client) (string, error) {
+	model := MP(new(M))
+	bindings := model.ColumnFieldBindings()
+	colNames := make([]string, len(bindings))
+	for i, b := range bindings {
+		colNames[i] = b.Column
+	}
+	tbl := model.Table()
+	cols, err := tbl.Columns().Choose(colNames...)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("SELECT %s FROM %s", QuoteJoinIdentifiers(c, cols.Names()), c.QuoteIdentifier(tbl.Name())), nil
+}
 
 // QueryDBModelFirst queries a single instance using QueryOpts with LIMIT 1.
 // Returns the instance or ErrNoRows if none matched.
@@ -18,12 +37,15 @@ import (
 func QueryDBModelFirst[M any, MP DBModel[M]](
 	ctx context.Context,
 	db DB,
-	sqlSelectBase string,
 	queryOpts QueryOpts,
 ) (MP, error) {
+	var zero MP
 	if queryOpts.Limit > 1 {
-		var zero MP
 		return zero, errs.SQLDB.WithDetail("QueryDBModelFirst does not accept Limit greater than 1")
+	}
+	sqlSelectBase, err := SelectBaseOf[M, MP](db.Client())
+	if err != nil {
+		return zero, fmt.Errorf("QueryDBModelFirst: %w", err)
 	}
 	whereSQL, args := WhereClause{queryOpts.WhereCond}.Build(db.Client(), 1)
 	sqlStmt := sqlSelectBase + whereSQL + OrderByClause(queryOpts.OrderBys) + LimitClause(1)
@@ -34,9 +56,12 @@ func QueryDBModelFirst[M any, MP DBModel[M]](
 func QueryDBModelCollection[M any, MP IdentifiableDBModel[M, ID], ID comparable](
 	ctx context.Context,
 	db DB,
-	sqlSelectBase string,
 	queryOpts QueryOpts,
 ) (*coll.Collection[MP, ID], error) {
+	sqlSelectBase, err := SelectBaseOf[M, MP](db.Client())
+	if err != nil {
+		return nil, fmt.Errorf("QueryDBModelCollection: %w", err)
+	}
 	whereSQL, args := WhereClause{queryOpts.WhereCond}.Build(db.Client(), 1)
 	sqlStmt := sqlSelectBase + whereSQL + OrderByClause(queryOpts.OrderBys) + LimitClause(queryOpts.Limit)
 	return RawQueryDBModelCollection[M, MP, ID](ctx, db, sqlStmt, args...)
@@ -48,7 +73,6 @@ func QueryDBModelCollection[M any, MP IdentifiableDBModel[M, ID], ID comparable]
 func QueryDBModelCollectionByColumn[M any, MP IdentifiableDBModel[M, ID], ID comparable, V any](
 	ctx context.Context,
 	db DB,
-	sqlSelectBase string,
 	column Column,
 	values []V,
 	orderBys ...OrderBy,
@@ -57,10 +81,11 @@ func QueryDBModelCollectionByColumn[M any, MP IdentifiableDBModel[M, ID], ID com
 		return nil, errs.SQLDB.WithDetail("QueryDBModelCollectionByColumn requires at least one value")
 	}
 	dbClient := db.Client()
-	var (
-		rows Rows
-		err  error
-	)
+	sqlSelectBase, err := SelectBaseOf[M, MP](dbClient)
+	if err != nil {
+		return nil, fmt.Errorf("QueryDBModelCollectionByColumn: %w", err)
+	}
+	var rows Rows
 	if len(values) == 1 {
 		whereClause := fmt.Sprintf(" WHERE %s = %s", column.Name(), dbClient.FirstPlaceholder())
 		sqlStmt := sqlSelectBase + whereClause + OrderByClause(orderBys)

@@ -54,6 +54,12 @@ var (
 	AssertionReplayed      = &Error{Name: "AssertionReplayed", Code: 1322, Message: "assertion replayed"}            // jti already seen inside its validity window
 	AssertionClientUnknown = &Error{Name: "AssertionClientUnknown", Code: 1323, Message: "assertion client unknown"} // iss names no configured client
 
+	// ---- External identity verification (id_token from an IdP or auth server)
+
+	IDTokenInvalid         = &Error{Name: "IDTokenInvalid", Code: 1330, Message: "invalid id_token"}                           // signature, aud/iss/exp, malformed, unknown kid, nonce, rejected claim, no sub — detail says which
+	AuthCodeExchangeFailed = &Error{Name: "AuthCodeExchangeFailed", Code: 1331, Message: "authorization code exchange failed"} // the IdP refused the code (stale/replayed code, redirect_uri, PKCE)
+	IDPUnavailable         = &Error{Name: "IDPUnavailable", Code: 1332, Message: "identity provider unavailable"}              // JWKS / token endpoint / auth server unreachable or answering garbage
+
 	// Data Format & Serialization
 
 	JSONMarshalFailed   = &Error{Name: "JSONMarshalFailed", Code: 1400, Message: "failed to marshal JSON"}

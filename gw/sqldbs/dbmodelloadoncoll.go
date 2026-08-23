@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/x64c/gwf/gw/coll"
-	"github.com/x64c/gwf/gw/errs"
 	"github.com/x64c/gwf/gw/model"
 	"github.com/x64c/gwf/gw/nullable"
 )
@@ -24,7 +23,6 @@ func LoadDBModelBelongsTo[
 	ctx context.Context,
 	db DB,
 	children *coll.Collection[CP, CID],
-	sqlSelectBase string, // must be clean from WHERE and bindings
 	foreignKey func(c CP) PID,
 	relationFieldPtr func(c CP) *PP,
 ) (
@@ -40,7 +38,7 @@ func LoadDBModelBelongsTo[
 	if err != nil {
 		return nil, fmt.Errorf("LoadDBModelBelongsTo: %w", err)
 	}
-	parents, err := QueryDBModelCollectionByColumn[P, PP, PID, any](ctx, db, sqlSelectBase, pkCol, fKeysAsAny)
+	parents, err := QueryDBModelCollectionByColumn[P, PP, PID, any](ctx, db, pkCol, fKeysAsAny)
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +66,6 @@ func LoadDBModelOptionalBelongsTo[
 	ctx context.Context,
 	db DB,
 	children *coll.Collection[CP, CID],
-	sqlSelectBase string, // must be clean from WHERE and bindings
 	foreignKeyFieldPtr func(c CP) *PID,
 	relationFieldPtr func(c CP) *PP,
 ) (
@@ -93,7 +90,7 @@ func LoadDBModelOptionalBelongsTo[
 	if err != nil {
 		return nil, fmt.Errorf("LoadDBModelOptionalBelongsTo: %w", err)
 	}
-	parents, err := QueryDBModelCollectionByColumn[P, PP, PID, any](ctx, db, sqlSelectBase, pkCol, fKeysAsAny)
+	parents, err := QueryDBModelCollectionByColumn[P, PP, PID, any](ctx, db, pkCol, fKeysAsAny)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +112,6 @@ func LoadDBModelNullableBelongsTo[
 	ctx context.Context,
 	db DB,
 	children *coll.Collection[CP, CID],
-	sqlSelectBase string, // must be clean from WHERE and bindings
 	nullableFKField func(c CP) nullable.Nullable[PID],
 	relationFieldPtr func(c CP) *PP,
 ) (
@@ -123,7 +119,7 @@ func LoadDBModelNullableBelongsTo[
 	error,
 ) {
 	return LoadDBModelOptionalBelongsTo[CP, CID, P, PP, PID](
-		ctx, db, children, sqlSelectBase,
+		ctx, db, children,
 		func(c CP) *PID { return nullableFKField(c).Ptr() },
 		relationFieldPtr,
 	)
@@ -139,7 +135,6 @@ func LoadDBModelHasMany[
 	ctx context.Context,
 	db DB,
 	parents *coll.Collection[PP, PID],
-	sqlSelectBase string, // must be clean from WHERE and bindings
 	foreignKeyColumn Column, // on the child
 	foreignKey func(CP) PID, // on the child
 	relationFieldPtr func(PP) **coll.Collection[CP, CID], // on the parent
@@ -147,6 +142,10 @@ func LoadDBModelHasMany[
 ) (*coll.Collection[CP, CID], error) {
 	if parents.Len() == 0 {
 		return coll.NewEmptyOrderedCollection[CP, CID](), nil
+	}
+	sqlSelectBase, err := SelectBaseOf[C, CP](db.Client())
+	if err != nil {
+		return nil, fmt.Errorf("LoadDBModelHasMany: %w", err)
 	}
 	whereClause := fmt.Sprintf(" WHERE %s IN (%s)", foreignKeyColumn.Name(), db.Client().InPlaceholders(1, parents.Len()))
 	sqlStmt := sqlSelectBase + whereClause + OrderByClause(orderBys)
@@ -171,7 +170,6 @@ func LoadDBModelHasManyQueryOpts[
 	ctx context.Context,
 	db DB,
 	parents *coll.Collection[PP, PID],
-	sqlSelectBase string, // must be clean from WHERE and bindings
 	foreignKeyColumn Column, // on the child
 	foreignKey func(CP) PID, // on the child
 	relationFieldPtr func(PP) **coll.Collection[CP, CID], // on the parent
@@ -179,6 +177,10 @@ func LoadDBModelHasManyQueryOpts[
 ) (*coll.Collection[CP, CID], error) {
 	if parents.Len() == 0 {
 		return coll.NewEmptyOrderedCollection[CP, CID](), nil
+	}
+	sqlSelectBase, err := SelectBaseOf[C, CP](db.Client())
+	if err != nil {
+		return nil, fmt.Errorf("LoadDBModelHasManyQueryOpts: %w", err)
 	}
 	var cond Cond = InPred{Column: foreignKeyColumn, Values: parents.IDsAsAny()}
 	if queryOpts.WhereCond != nil {
@@ -192,140 +194,4 @@ func LoadDBModelHasManyQueryOpts[
 	}
 	parents.LinkHasMany(children, foreignKey, relationFieldPtr)
 	return children, nil
-}
-
-// LoadDBModelBelongsToWithStoreKey wraps LoadDBModelBelongsTo with a
-// RawSQLStore key lookup.
-func LoadDBModelBelongsToWithStoreKey[
-	CP model.Identifiable[CID],
-	CID comparable,
-	P any,
-	PP IdentifiableDBModel[P, PID],
-	PID comparable,
-](
-	ctx context.Context,
-	db DB,
-	children *coll.Collection[CP, CID],
-	storeKey string,
-	foreignKey func(c CP) PID,
-	relationFieldPtr func(c CP) *PP,
-) (
-	*coll.Collection[PP, PID],
-	error,
-) {
-	sqlBase, ok := db.MainRawSQLStore().Get(storeKey)
-	if !ok {
-		return nil, errs.SQLNotFoundInStore.WithDetail(storeKey)
-	}
-	return LoadDBModelBelongsTo[CP, CID, P, PP, PID](ctx, db, children, sqlBase, foreignKey, relationFieldPtr)
-}
-
-// LoadDBModelOptionalBelongsToWithStoreKey wraps LoadDBModelOptionalBelongsTo
-// with a RawSQLStore key lookup.
-func LoadDBModelOptionalBelongsToWithStoreKey[
-	CP model.Identifiable[CID],
-	CID comparable,
-	P any,
-	PP IdentifiableDBModel[P, PID],
-	PID comparable,
-](
-	ctx context.Context,
-	db DB,
-	children *coll.Collection[CP, CID],
-	storeKey string,
-	foreignKeyFieldPtr func(c CP) *PID,
-	relationFieldPtr func(c CP) *PP,
-) (
-	*coll.Collection[PP, PID],
-	error,
-) {
-	sqlBase, ok := db.MainRawSQLStore().Get(storeKey)
-	if !ok {
-		return nil, errs.SQLNotFoundInStore.WithDetail(storeKey)
-	}
-	return LoadDBModelOptionalBelongsTo[CP, CID, P, PP, PID](ctx, db, children, sqlBase, foreignKeyFieldPtr, relationFieldPtr)
-}
-
-// LoadDBModelNullableBelongsToWithStoreKey wraps LoadDBModelNullableBelongsTo
-// with a RawSQLStore key lookup.
-func LoadDBModelNullableBelongsToWithStoreKey[
-	CP model.Identifiable[CID],
-	CID comparable,
-	P any,
-	PP IdentifiableDBModel[P, PID],
-	PID comparable,
-](
-	ctx context.Context,
-	db DB,
-	children *coll.Collection[CP, CID],
-	storeKey string,
-	nullableFKField func(c CP) nullable.Nullable[PID],
-	relationFieldPtr func(c CP) *PP,
-) (
-	*coll.Collection[PP, PID],
-	error,
-) {
-	sqlBase, ok := db.MainRawSQLStore().Get(storeKey)
-	if !ok {
-		return nil, errs.SQLNotFoundInStore.WithDetail(storeKey)
-	}
-	return LoadDBModelNullableBelongsTo[CP, CID, P, PP, PID](ctx, db, children, sqlBase, nullableFKField, relationFieldPtr)
-}
-
-// LoadDBModelHasManyWithStoreKey wraps LoadDBModelHasMany with a RawSQLStore
-// key lookup and FK column name.
-func LoadDBModelHasManyWithStoreKey[
-	PP model.Identifiable[PID],
-	PID comparable,
-	C any,
-	CP IdentifiableDBModel[C, CID],
-	CID comparable,
-](
-	ctx context.Context,
-	db DB,
-	parents *coll.Collection[PP, PID],
-	storeKey string,
-	fkColumnName string,
-	foreignKey func(CP) PID,
-	relationFieldPtr func(PP) **coll.Collection[CP, CID],
-	orderBys ...OrderBy,
-) (*coll.Collection[CP, CID], error) {
-	sqlBase, ok := db.MainRawSQLStore().Get(storeKey)
-	if !ok {
-		return nil, errs.SQLNotFoundInStore.WithDetail(storeKey)
-	}
-	fkCol, err := NewColumn(fkColumnName)
-	if err != nil {
-		return nil, fmt.Errorf("invalid foreign key column name %q", fkColumnName)
-	}
-	return LoadDBModelHasMany[PP, PID, C, CP, CID](ctx, db, parents, sqlBase, fkCol, foreignKey, relationFieldPtr, orderBys...)
-}
-
-// LoadDBModelHasManyQueryOptsWithStoreKey wraps LoadDBModelHasManyQueryOpts
-// with a RawSQLStore key lookup and FK column name.
-func LoadDBModelHasManyQueryOptsWithStoreKey[
-	PP model.Identifiable[PID],
-	PID comparable,
-	C any,
-	CP IdentifiableDBModel[C, CID],
-	CID comparable,
-](
-	ctx context.Context,
-	db DB,
-	parents *coll.Collection[PP, PID],
-	storeKey string,
-	fkColumnName string,
-	foreignKey func(CP) PID,
-	relationFieldPtr func(PP) **coll.Collection[CP, CID],
-	queryOpts QueryOpts,
-) (*coll.Collection[CP, CID], error) {
-	sqlBase, ok := db.MainRawSQLStore().Get(storeKey)
-	if !ok {
-		return nil, errs.SQLNotFoundInStore.WithDetail(storeKey)
-	}
-	fkCol, err := NewColumn(fkColumnName)
-	if err != nil {
-		return nil, fmt.Errorf("invalid foreign key column name %q", fkColumnName)
-	}
-	return LoadDBModelHasManyQueryOpts[PP, PID, C, CP, CID](ctx, db, parents, sqlBase, fkCol, foreignKey, relationFieldPtr, queryOpts)
 }
