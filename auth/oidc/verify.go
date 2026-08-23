@@ -5,9 +5,9 @@ import (
 	"crypto/subtle"
 	"encoding/json/v2"
 	"errors"
-	"fmt"
 
 	"github.com/x64c/gwf/gw/authn"
+	"github.com/x64c/gwf/gw/errs"
 	"github.com/x64c/gwf/gw/security"
 	"golang.org/x/oauth2"
 )
@@ -22,6 +22,10 @@ import (
 // `aud` = ClientID, `iss` = Issuer), nonce echo, RequiredClaims equality,
 // RequireEmailVerified when set. Subject is the token's `sub` — the
 // provider-stable identifier; the email claim is data, not identity.
+//
+// Failures are errs.AuthCodeExchangeFailed (the provider refused the code),
+// errs.IDTokenInvalid (detail says which check), or errs.IDPUnavailable
+// (token endpoint or JWKS unreachable).
 func (p *Provider) VerifyAuthCode(ctx context.Context, code, redirectURI, nonce, pkceVerifier string) (authn.VerifiedIdentity, error) {
 	exchangeConf := &oauth2.Config{
 		ClientID:     p.ClientID,
@@ -32,64 +36,64 @@ func (p *Provider) VerifyAuthCode(ctx context.Context, code, redirectURI, nonce,
 	}
 	token, err := exchangeConf.Exchange(ctx, code, oauth2.SetAuthURLParam("code_verifier", pkceVerifier))
 	if err != nil {
-		return authn.VerifiedIdentity{}, fmt.Errorf("oidc: code exchange: %w", err)
+		if _, refused := errors.AsType[*oauth2.RetrieveError](err); refused {
+			return authn.VerifiedIdentity{}, errs.AuthCodeExchangeFailed.Wrap(err)
+		}
+		return authn.VerifiedIdentity{}, errs.IDPUnavailable.Wrap(err)
 	}
 
 	signedIDToken, ok := token.Extra("id_token").(string)
 	if !ok || signedIDToken == "" {
-		return authn.VerifiedIdentity{}, errors.New("oidc: no id_token in token response")
+		return authn.VerifiedIdentity{}, errs.IDTokenInvalid.WithDetail("missing from token response")
 	}
 
 	encodedHeader, _, _, err := security.SplitSignedJwtTokenRawParts(signedIDToken)
 	if err != nil {
-		return authn.VerifiedIdentity{}, fmt.Errorf("oidc: malformed id_token: %w", err)
+		return authn.VerifiedIdentity{}, errs.IDTokenInvalid.WithDetail("malformed")
 	}
 	headerBytes, err := security.DecodeJwtHeader(encodedHeader)
 	if err != nil {
-		return authn.VerifiedIdentity{}, fmt.Errorf("oidc: malformed id_token header: %w", err)
+		return authn.VerifiedIdentity{}, errs.IDTokenInvalid.WithDetail("malformed header")
 	}
 	var header struct {
 		Kid string `json:"kid"`
 	}
-	if err = json.Unmarshal(headerBytes, &header); err != nil {
-		return authn.VerifiedIdentity{}, fmt.Errorf("oidc: malformed id_token header: %w", err)
-	}
-	if header.Kid == "" {
-		return authn.VerifiedIdentity{}, errors.New("oidc: id_token header has no kid")
+	if err = json.Unmarshal(headerBytes, &header); err != nil || header.Kid == "" {
+		return authn.VerifiedIdentity{}, errs.IDTokenInvalid.WithDetail("kid required")
 	}
 
-	pubKey, err := p.keyByKID(ctx, header.Kid)
-	if err != nil {
-		return authn.VerifiedIdentity{}, fmt.Errorf("oidc: signing key: %w", err)
+	pubKey, e := p.keyByKID(ctx, header.Kid)
+	if e != nil {
+		return authn.VerifiedIdentity{}, e
 	}
 
 	claims, err := security.VerifyRSASignedIDToken(signedIDToken, pubKey, p.ClientID, p.Issuer)
 	if err != nil {
-		return authn.VerifiedIdentity{}, fmt.Errorf("oidc: id_token validation: %w", err)
+		return authn.VerifiedIdentity{}, errs.IDTokenInvalid.Wrap(err)
 	}
 
 	tokenNonce, ok := claims["nonce"].(string)
 	if !ok || subtle.ConstantTimeCompare([]byte(tokenNonce), []byte(nonce)) != 1 {
-		return authn.VerifiedIdentity{}, errors.New("oidc: nonce mismatch")
+		return authn.VerifiedIdentity{}, errs.IDTokenInvalid.WithDetail("nonce mismatch")
 	}
 
 	for claim, want := range p.RequiredClaims {
 		got, ok := claims[claim].(string)
 		if !ok || got != want {
-			return authn.VerifiedIdentity{}, fmt.Errorf("oidc: required claim %q not satisfied", claim)
+			return authn.VerifiedIdentity{}, errs.IDTokenInvalid.WithDetail("required claim " + claim + " not satisfied")
 		}
 	}
 
 	if p.RequireEmailVerified {
 		verified, ok := claims["email_verified"].(bool)
 		if !ok || !verified {
-			return authn.VerifiedIdentity{}, errors.New("oidc: email not verified")
+			return authn.VerifiedIdentity{}, errs.IDTokenInvalid.WithDetail("email not verified")
 		}
 	}
 
 	sub, ok := claims["sub"].(string)
 	if !ok || sub == "" {
-		return authn.VerifiedIdentity{}, errors.New("oidc: id_token has no sub")
+		return authn.VerifiedIdentity{}, errs.IDTokenInvalid.WithDetail("sub required")
 	}
 
 	return authn.VerifiedIdentity{

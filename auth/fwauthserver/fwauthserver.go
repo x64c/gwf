@@ -9,12 +9,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json/v2"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 
 	"github.com/x64c/gwf/gw/authn"
+	"github.com/x64c/gwf/gw/errs"
 	"github.com/x64c/gwf/gw/security"
 	"github.com/x64c/gwf/gw/web/fwupstream"
 )
@@ -41,6 +41,10 @@ func (e *UpstreamError) Error() string { return fmt.Sprintf("auth server answere
 // `aud` = this app's client id at the auth server, `iss` = the auth server
 // host) against the auth server's JWKS. Subject is the token's `sub`. The
 // auth server's token response is returned alongside for the app to keep.
+//
+// Failures are *UpstreamError (the auth server answered non-200 — forward
+// it), errs.IDTokenInvalid (detail says which check), or errs.IDPUnavailable
+// (auth server or its JWKS unreachable).
 func (v *Verifier) VerifyAuthCode(ctx context.Context, req security.AuthRequestBody) (authn.VerifiedIdentity, *security.AuthResponseBody, error) {
 	endpoint, ok := v.Upstream.Conf.VerifyAuthCodeEndpoints[v.ProviderID]
 	if !ok {
@@ -59,7 +63,7 @@ func (v *Verifier) VerifyAuthCode(ctx context.Context, req security.AuthRequestB
 	httpReq.Header.Set("Accept", "application/json")
 	res, err := v.Upstream.Do(httpReq)
 	if err != nil {
-		return authn.VerifiedIdentity{}, nil, fmt.Errorf("fwauthserver: request: %w", err)
+		return authn.VerifiedIdentity{}, nil, errs.IDPUnavailable.Wrap(err)
 	}
 	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode != http.StatusOK {
@@ -69,47 +73,44 @@ func (v *Verifier) VerifyAuthCode(ctx context.Context, req security.AuthRequestB
 
 	var authRes security.AuthResponseBody
 	if err = json.UnmarshalRead(res.Body, &authRes); err != nil {
-		return authn.VerifiedIdentity{}, nil, fmt.Errorf("fwauthserver: response decode: %w", err)
+		return authn.VerifiedIdentity{}, nil, errs.IDPUnavailable.Wrap(fmt.Errorf("response decode: %w", err))
 	}
 
 	encodedHeader, _, _, err := security.SplitSignedJwtTokenRawParts(authRes.IDToken)
 	if err != nil {
-		return authn.VerifiedIdentity{}, nil, fmt.Errorf("fwauthserver: malformed id_token: %w", err)
+		return authn.VerifiedIdentity{}, nil, errs.IDTokenInvalid.WithDetail("malformed")
 	}
 	headerBytes, err := security.DecodeJwtHeader(encodedHeader)
 	if err != nil {
-		return authn.VerifiedIdentity{}, nil, fmt.Errorf("fwauthserver: malformed id_token header: %w", err)
+		return authn.VerifiedIdentity{}, nil, errs.IDTokenInvalid.WithDetail("malformed header")
 	}
 	var header struct {
 		Kid string `json:"kid"`
 	}
-	if err = json.Unmarshal(headerBytes, &header); err != nil {
-		return authn.VerifiedIdentity{}, nil, fmt.Errorf("fwauthserver: malformed id_token header: %w", err)
-	}
-	if header.Kid == "" {
-		return authn.VerifiedIdentity{}, nil, errors.New("fwauthserver: id_token header has no kid")
+	if err = json.Unmarshal(headerBytes, &header); err != nil || header.Kid == "" {
+		return authn.VerifiedIdentity{}, nil, errs.IDTokenInvalid.WithDetail("kid required")
 	}
 
 	jwks, resErr := v.Upstream.FetchJWKS(ctx)
 	if resErr != nil {
-		return authn.VerifiedIdentity{}, nil, fmt.Errorf("fwauthserver: jwks: %w", resErr)
+		return authn.VerifiedIdentity{}, nil, errs.IDPUnavailable.Wrap(resErr)
 	}
 	jwk, err := jwks.GetJWKByKID(header.Kid)
 	if err != nil {
-		return authn.VerifiedIdentity{}, nil, fmt.Errorf("fwauthserver: kid %q: %w", header.Kid, err)
+		return authn.VerifiedIdentity{}, nil, errs.IDTokenInvalid.WithDetail("unknown kid " + header.Kid)
 	}
 	pubKey, err := jwk.ToPublicKey()
 	if err != nil {
-		return authn.VerifiedIdentity{}, nil, fmt.Errorf("fwauthserver: jwk: %w", err)
+		return authn.VerifiedIdentity{}, nil, errs.IDPUnavailable.Wrap(fmt.Errorf("jwk: %w", err))
 	}
 
 	claims, err := security.VerifyRSASignedIDToken(authRes.IDToken, pubKey, v.Upstream.Conf.ClientID, v.Upstream.Conf.Host)
 	if err != nil {
-		return authn.VerifiedIdentity{}, nil, fmt.Errorf("fwauthserver: id_token validation: %w", err)
+		return authn.VerifiedIdentity{}, nil, errs.IDTokenInvalid.Wrap(err)
 	}
 	sub, ok := claims["sub"].(string)
 	if !ok || sub == "" {
-		return authn.VerifiedIdentity{}, nil, errors.New("fwauthserver: id_token has no sub")
+		return authn.VerifiedIdentity{}, nil, errs.IDTokenInvalid.WithDetail("sub required")
 	}
 
 	return authn.VerifiedIdentity{

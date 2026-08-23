@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/x64c/gwf/gw/errs"
 	"github.com/x64c/gwf/gw/security"
 )
 
@@ -21,46 +22,54 @@ var jwksHTTPClient = &http.Client{Timeout: 10 * time.Second}
 
 // keyByKID returns the provider signing key for kid, from the cached JWKS
 // when it holds the kid, refetching once on a miss (key rotation).
-func (p *Provider) keyByKID(ctx context.Context, kid string) (*rsa.PublicKey, error) {
+func (p *Provider) keyByKID(ctx context.Context, kid string) (*rsa.PublicKey, *errs.Error) {
 	p.jwksMu.Lock()
 	defer p.jwksMu.Unlock()
 	if p.jwks != nil {
 		if jwk, err := p.jwks.GetJWKByKID(kid); err == nil {
-			return jwk.ToPublicKey()
+			return publicKeyOf(jwk)
 		}
 		if time.Since(p.jwksFetchedAt) < jwksRefetchMinInterval {
-			return nil, fmt.Errorf("kid %q not in provider JWKS", kid)
+			return nil, errs.IDTokenInvalid.WithDetail("unknown kid " + kid)
 		}
 	}
-	jwks, err := fetchJWKS(ctx, p.JWKSURL)
-	if err != nil {
-		return nil, err
+	jwks, e := fetchJWKS(ctx, p.JWKSURL)
+	if e != nil {
+		return nil, e
 	}
 	p.jwks = jwks
 	p.jwksFetchedAt = time.Now()
 	jwk, err := jwks.GetJWKByKID(kid)
 	if err != nil {
-		return nil, fmt.Errorf("kid %q not in provider JWKS", kid)
+		return nil, errs.IDTokenInvalid.WithDetail("unknown kid " + kid)
 	}
-	return jwk.ToPublicKey()
+	return publicKeyOf(jwk)
 }
 
-func fetchJWKS(ctx context.Context, jwksURL string) (*security.JWKS, error) {
+func publicKeyOf(jwk *security.JWK) (*rsa.PublicKey, *errs.Error) {
+	pubKey, err := jwk.ToPublicKey()
+	if err != nil {
+		return nil, errs.IDPUnavailable.Wrap(fmt.Errorf("jwk: %w", err))
+	}
+	return pubKey, nil
+}
+
+func fetchJWKS(ctx context.Context, jwksURL string) (*security.JWKS, *errs.Error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jwksURL, nil)
 	if err != nil {
-		return nil, err
+		return nil, errs.IDPUnavailable.Wrap(err)
 	}
 	res, err := jwksHTTPClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("jwks fetch: %w", err)
+		return nil, errs.IDPUnavailable.Wrap(fmt.Errorf("jwks fetch: %w", err))
 	}
 	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("jwks fetch: status %d", res.StatusCode)
+		return nil, errs.IDPUnavailable.WithDetail(fmt.Sprintf("jwks fetch: status %d", res.StatusCode))
 	}
 	var jwks security.JWKS
 	if err = json.UnmarshalRead(res.Body, &jwks); err != nil {
-		return nil, fmt.Errorf("jwks decode: %w", err)
+		return nil, errs.IDPUnavailable.Wrap(fmt.Errorf("jwks decode: %w", err))
 	}
 	return &jwks, nil
 }
