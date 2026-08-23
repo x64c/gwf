@@ -47,6 +47,13 @@ var (
 	UserNotFound      = &Error{Name: "UserNotFound", Code: 1310, Message: "user not found"}
 	UserDisabled      = &Error{Name: "UserDisabled", Code: 1311, Message: "user disabled"}
 
+	// ---- Signed assertions (machine callers)
+
+	AssertionNotFound      = &Error{Name: "AssertionNotFound", Code: 1320, Message: "assertion not found"}           // no Authorization header, or not the assertion scheme
+	InvalidAssertion       = &Error{Name: "InvalidAssertion", Code: 1321, Message: "invalid assertion"}              // malformed, bad signature, claim or request-binding mismatch — detail says which
+	AssertionReplayed      = &Error{Name: "AssertionReplayed", Code: 1322, Message: "assertion replayed"}            // jti already seen inside its validity window
+	AssertionClientUnknown = &Error{Name: "AssertionClientUnknown", Code: 1323, Message: "assertion client unknown"} // iss names no configured client
+
 	// Data Format & Serialization
 
 	JSONMarshalFailed   = &Error{Name: "JSONMarshalFailed", Code: 1400, Message: "failed to marshal JSON"}
