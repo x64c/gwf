@@ -92,6 +92,7 @@ var (
 	InvalidUpstreamAccessToken      = &Error{Name: "InvalidUpstreamAccessToken", Code: 1802, Message: "invalid upstream access token"}
 	InvalidUpstreamRefreshToken     = &Error{Name: "InvalidUpstreamRefreshToken", Code: 1803, Message: "invalid upstream refresh token"}
 	Upstream                        = &Error{Name: "Upstream", Code: 1810, Message: "upstream error"}                                                    // failure during upstream interaction (build/transport/server)
+	UpstreamUnavailable             = &Error{Name: "UpstreamUnavailable", Code: 1811, Message: "upstream unavailable"}                                   // upstream unreachable, or its gateway answered 502/504 for it — the caller translates for its own users
 	UpstreamRefreshSideloaderNotSet = &Error{Name: "UpstreamRefreshSideloaderNotSet", Code: 1820, Message: "upstream refresh sideloader not configured"} // no refresh sideloader registered on Client for this session-data type
 	UpstreamTokenCipherNotSet       = &Error{Name: "UpstreamTokenCipherNotSet", Code: 1830, Message: "upstream token cipher not configured"}             // at-rest cipher missing while storing/fetching upstream tokens — KEK boot step skipped
 

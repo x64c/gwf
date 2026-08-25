@@ -71,11 +71,20 @@ func (c *Client) RequestWithBearer(
 
 	res, err := c.Do(req)
 	if err != nil {
-		return nil, http.StatusBadGateway, errs.Upstream.Wrap(err)
+		// No upstream answer exists; 502 is the synthesized report of this
+		// gateway-style failure. The sentinel classifies it — the caller
+		// translates status for its own users.
+		return nil, http.StatusBadGateway, errs.UpstreamUnavailable.Wrap(err)
 	}
 
 	if res.StatusCode != http.StatusOK {
 		defer func() { _ = res.Body.Close() }()
+		// A 502/504 answer is the upstream's fronting proxy speaking for a dead
+		// service, not the upstream API — no JSON error body to parse. The
+		// status is relayed as the factual report; the sentinel classifies it.
+		if res.StatusCode == http.StatusBadGateway || res.StatusCode == http.StatusGatewayTimeout {
+			return nil, res.StatusCode, errs.UpstreamUnavailable.WithDetail("upstream gateway answered " + res.Status)
+		}
 		var apiErr errs.Error
 		if err := json.UnmarshalRead(res.Body, &apiErr); err != nil {
 			return nil, res.StatusCode, errs.JSONUnmarshalFailed.WithDetail("failed to unmarshal upstream error").WithCause(err)

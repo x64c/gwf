@@ -70,11 +70,17 @@ func (c *Client) RequestWithoutBearer(
 
 	res, err := c.Do(req)
 	if err != nil {
-		return nil, http.StatusBadGateway, errs.Upstream.Wrap(err)
+		// See RequestWithBearer's transport-failure note.
+		return nil, http.StatusBadGateway, errs.UpstreamUnavailable.Wrap(err)
 	}
 
 	if res.StatusCode != http.StatusOK {
 		defer func() { _ = res.Body.Close() }()
+		// 502/504 = the upstream's fronting proxy, not the upstream API — see
+		// RequestWithBearer's note.
+		if res.StatusCode == http.StatusBadGateway || res.StatusCode == http.StatusGatewayTimeout {
+			return nil, res.StatusCode, errs.UpstreamUnavailable.WithDetail("upstream gateway answered " + res.Status)
+		}
 		var apiErr errs.Error
 		if err := json.UnmarshalRead(res.Body, &apiErr); err != nil {
 			return nil, res.StatusCode, errs.JSONUnmarshalFailed.WithDetail("failed to unmarshal upstream error").WithCause(err)
