@@ -1,11 +1,11 @@
 package handlerwrappers
 
 import (
-	"fmt"
 	"log"
 	"net/http"
 	"strings"
 
+	"github.com/x64c/gwf/gw/errs"
 	"github.com/x64c/gwf/gw/framework"
 	"github.com/x64c/gwf/gw/namedlocks"
 	"github.com/x64c/gwf/gw/web/responses"
@@ -22,11 +22,11 @@ func runActionLocks(w http.ResponseWriter, r *http.Request, inner http.Handler, 
 	if !ok {
 		// Fail-fast: resource is already locked
 		if len(lockKeys) == 1 {
-			responses.WriteSimpleErrorJSON(w, http.StatusConflict, fmt.Sprintf("action [%s] locked by another request", lockKeys[0]))
+			responses.WriteErrorJSON(w, http.StatusConflict, errs.ActionLocked.WithDetail(lockKeys[0]))
 			return
 		}
 		lockedActionsStr := strings.Join(lockKeys, ", ")
-		responses.WriteSimpleErrorJSON(w, http.StatusConflict, fmt.Sprintf("some of actions in [%s] locked by another request", lockedActionsStr))
+		responses.WriteErrorJSON(w, http.StatusConflict, errs.ActionLocked.WithDetail("some of "+lockedActionsStr))
 		return
 	}
 	defer func() {

@@ -15,6 +15,8 @@ var (
 	RequestBodyTooLarge   = &Error{Name: "RequestBodyTooLarge", Code: 1001, Message: "request body too large"}               // actual body bytes exceeded limit during streaming read
 	OriginNotAllowed      = &Error{Name: "OriginNotAllowed", Code: 1010, Message: "request origin not allowed"}              // Origin header missing, or not in the configured allowlist
 	ServiceUnavailable    = &Error{Name: "ServiceUnavailable", Code: 1020, Message: "service unavailable"}                   // a service the endpoint needs is not admitted for use right now (stopped, terminating, or never wired)
+	ActionLocked          = &Error{Name: "ActionLocked", Code: 1030, Message: "action locked by another request"}           // a named action lock the endpoint needs is held; retry later
+	InternalError         = &Error{Name: "InternalError", Code: 1050, Message: "internal server error"}
 
 	// Session
 
@@ -32,6 +34,8 @@ var (
 	BearerSessionGroupNotAllowed = &Error{Name: "BearerSessionGroupNotAllowed", Code: 1115, Message: "bearer session group not allowed"} // session's group isn't in the endpoint's allowlist
 	BearerClientNotFound         = &Error{Name: "BearerClientNotFound", Code: 1116, Message: "bearer client not found"}                  // Client-Id missing in request OR unknown to the bearer client registry
 	BearerSessionNotFound        = &Error{Name: "BearerSessionNotFound", Code: 1117, Message: "bearer session not found"}                // the session row a token resolves to is gone; counterpart of CookieSessionNotFound
+	BearerUserClaimInvalid       = &Error{Name: "BearerUserClaimInvalid", Code: 1118, Message: "bearer user claim invalid"}              // user token exchange: the identity's user claim is absent or names no user
+	BearerSessionNotOwned        = &Error{Name: "BearerSessionNotOwned", Code: 1119, Message: "bearer session not owned by client"}      // the session belongs to another client than the caller
 
 	// ---- Cookie Session
 

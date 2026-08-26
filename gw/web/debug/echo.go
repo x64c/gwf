@@ -9,7 +9,6 @@ import (
 	"bytes"
 	"encoding/json/v2"
 	"errors"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -47,7 +46,7 @@ func (h *EchoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.MaxMemoryMB <= 0 {
-		responses.WriteSimpleErrorJSON(w, http.StatusInternalServerError, "EchoHandler.MaxMemoryMB must be > 0")
+		responses.WriteErrorJSON(w, http.StatusInternalServerError, errs.InternalError.WithDetail("EchoHandler.MaxMemoryMB must be > 0"))
 		return
 	}
 
@@ -66,7 +65,7 @@ func (h *EchoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			responses.WriteErrorJSON(w, http.StatusRequestEntityTooLarge, errs.RequestBodyTooLarge)
 			return
 		}
-		responses.WriteSimpleErrorJSON(w, http.StatusInternalServerError, fmt.Sprintf("Failed to Read OriginalData: %v", err))
+		responses.WriteErrorJSON(w, http.StatusInternalServerError, errs.InternalError.WithDetail("failed to read body").WithCause(err))
 		return
 	}
 

@@ -157,7 +157,7 @@ bearer session for that user.
 downstream   Signer.Sign(POST, exchange endpoint, nil, {<user claim>: uid})
 downstream ── Authorization: JWTAssert ──▶ upstream   VerifyRequest; read the user claim;
                                                       bearer.SessionManager.CreateSession(group, client, uid)
-downstream ◀─ 200 {access_token, expires_in} ─ upstream
+downstream ◀─ 200 {access_token, expires_in, token_type} ─ upstream
 downstream   StoreTokenPair(access, "") on its own session row (slot keyed by its client id at the upstream)
 downstream ── Authorization: Bearer ─────▶ upstream   BearerUserSession gate; the user's request
 ```
@@ -165,16 +165,19 @@ downstream ── Authorization: Bearer ─────▶ upstream   BearerUser
 | Side | Parts |
 |---|---|
 | Downstream | `jwtassert.Signer` · `fwupstream.Client` (`host`, `client_id`, token cipher) · `UserSessionData.UpstreamAccessToken` / `UpstreamHub().StoreTokenPair` · `fwupstream.Client.RequestWithBearer` |
-| Upstream | `jwtassert.Verifier` behind `jwtassert.Gate` · `bearer.SessionManager` (a dedicated session group for exchanged tokens; the downstream registered under the same id in both the bearer and the jwtassert registries) · `handlerwrappers.BearerUserSession` |
+| Upstream | `jwtassert.Verifier` behind `jwtassert.Gate` · `bearer.UserTokenExchangeHandler` (exchange endpoint) · `bearer.TokenRevokeHandler` (revocation endpoint) · `bearer.SessionManager` (a user-bound session group for exchanged tokens; the downstream registered under the same id in both the bearer and the jwtassert registries) · `handlerwrappers.BearerUserSession` |
 
-- The user claim name, the exchange endpoint, and the revocation
-  endpoint are the app's; the framework passes extra claims through and
-  provides session create/destroy.
+- The exchange and revocation handlers are `bearer`'s; their paths, the
+  user claim name (`UserClaim`), and what a claim value must look like to
+  name a user (`ParseUser`) are the app's. The handlers read the verified
+  identity from the request context, so they work behind the gate of any
+  method that places one.
 - A minted token has no refresh token: on a cache miss or a 401 the
   downstream mints again. `StoreTokenPair` writes only while the session row
   exists.
 - Revocation: the downstream presents the access token to the upstream's
-  revocation endpoint; the upstream calls `DestroySession`.
+  revocation endpoint; `TokenRevokeHandler` destroys the session if the
+  presenting client owns it (`{"revoked": true|false}`, idempotent).
 - An unreachable upstream, or its gateway answering 502/504 for it, is
   reported as `errs.UpstreamUnavailable` with the upstream's status; the
   downstream chooses its own answer to its users.

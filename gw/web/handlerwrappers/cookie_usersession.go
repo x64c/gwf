@@ -89,14 +89,20 @@ func (m *CookieUserSession[UID]) authenticateCookieSession(
 	}
 	sessionIDBytes, err := mgr.UserCookieCipher.DecodeDecrypt(sessionCookie.Value, mgr.UserCookieCipherContext())
 	if err != nil {
-		responses.WriteSimpleErrorJSON(w, http.StatusUnauthorized, fmt.Sprintf("invalid session. %v", err))
+		// The cookie names no readable session (garbage, or sealed under a
+		// retired key). Answered like any other invalid session: end it and
+		// send the human back to login. A bare error here would strand the
+		// browser — the cookie would be re-presented on every request.
+		mgr.DeleteUserSessionCookie(w)
+		cookie.SetIntendedURICookie(w, r, 60)
+		http.Redirect(w, r, mgr.Conf.UserSession.LoginPath+"?session=invalid", http.StatusSeeOther)
 		return nil, nil, "", "", false
 	}
 	sessionID = string(sessionIDBytes)
 
 	row, err := mgr.FetchUserSession(ctx, sessionID)
 	if err != nil {
-		responses.WriteSimpleErrorJSON(w, http.StatusInternalServerError, fmt.Sprintf("failed to check session. %v", err))
+		responses.WriteErrorJSON(w, http.StatusInternalServerError, errs.KVDB.WithDetail("failed to check session").WithCause(err))
 		return nil, nil, "", "", false
 	}
 	if row == nil {
