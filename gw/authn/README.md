@@ -31,9 +31,9 @@ compositions the parts have been exercised in.
 | Package | Role |
 |---|---|
 | `authn` | The seam: `Method`, `VerifiedIdentity`, request-context carriage (`WithVerifiedIdentity` / `VerifiedIdentityFromContext`), and `FlowManager` / `FlowTicket` for browser-mediated flows. |
-| `auth/oidc` | Relying-party halves for the OIDC authorization-code flow with PKCE. `Provider.AuthCodeURL` (initiate), `Provider.VerifyAuthCode` (verify). A `Provider` is described entirely by configuration. |
+| `auth/oidc` | Relying-party halves for the OIDC authorization-code flow with PKCE. `Provider.AuthCodeURL` (initiate), `Provider.VerifyAuthCode` (verify). A `Provider` is described entirely by configuration; `WebLoginConfs` (`LoadWebLoginConfs`) holds an app's browser logins keyed by identity provider id — `{"<idp id>": {"provider": {…}, "redirect_uri": "…"}}`. |
 | `auth/fwauthserver` | Verify half delegated to an auth server: `Verifier.VerifyAuthCode` forwards the code and flow secrets, validates the auth server's ID token against its JWKS. |
-| `auth/jwtassert` | Machine authentication: `Signer` (client half), `Verifier` (receiving half). |
+| `auth/jwtassert` | Machine authentication: `Signer` (client half), `Verifier` (receiving half), `Gate` (handler wrapper). `SignerConfs` (`LoadSignerConfs`, `NewSigner`) holds a downstream's signers keyed by fwupstream client id — `{"<client id>": {"kid": …, "private_key_path": …, "audience": …, "max_age": …}}`. |
 | `security` | Wire bodies between a downstream and an auth server: `AuthRequestBody`, `AuthResponseBody`, `RefreshAccessTokenRequestBody`. |
 | `session/cookie`, `session/bearer` | Session flavors; session rows live in the KVDB. Each row carries per-upstream token slots. |
 | `fwupstream` | Downstream side of an upstream relationship: client configuration, bearer-carrying request ladder, access-token refresh, upstream JWKS fetch. |
