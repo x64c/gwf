@@ -75,7 +75,7 @@ browser ◀─ Set-Cookie; 302 ─────────────  app
 
 | Side | Parts |
 |---|---|
-| Browser-facing app | `authn.FlowManager` · `oidc.Provider` (initiate half; `ClientSecret` empty) · `oidc.AuthCodeRequestHandler` (login endpoint) · `fwauthserver.Verifier{Upstream, ProviderID}` · `cookie.SessionManager` · `UserSessionData.UpstreamHub().StoreTokenPair` |
+| Browser-facing app | `authn.FlowManager` · `oidc.Provider` (initiate half; `ClientSecret` empty) · `oidc.AuthCodeRequestHandler` (login endpoint) · `fwauthserver.DelegatedExchangeCallbackHandler` (callback endpoint: ticket → `fwauthserver.Verifier` → `authn.UIDStrResolver` → cookie session + token pair → `cookie.FinishLogin`) · `cookie.SessionManager` |
 | Auth server | `oidc.Provider` (verify half; holds the client secret) · `bearer.SessionManager` (a session group per client kind; clients registered by name → opaque id) · `bearer.RefreshAccessTokenHandler` · JWKS |
 
 Configuration on the browser-facing side: `fwupstream.ClientConf` — `host`,
@@ -108,7 +108,16 @@ browser ◀─ Set-Cookie; 302 ─────────────  app
 ```
 
 Parts: `authn.FlowManager` · `oidc.Provider` (both halves) ·
-`oidc.AuthCodeRequestHandler` (login endpoint) · `cookie.SessionManager`.
+`oidc.AuthCodeRequestHandler` (login endpoint) ·
+`oidc.DirectExchangeCallbackHandler` (callback endpoint: ticket → verify →
+`authn.UIDStrResolver` → cookie session → `cookie.FinishLogin`) ·
+`cookie.SessionManager`.
+
+`authn.UIDStrResolver` is the app's: it maps the verified identity to the
+uid string the session stores, or refuses (answered 401 with its error).
+Which claim identifies the person, where users live, and what "may log in"
+means are decided there. `cookie.FinishLogin` sets the session cookie and
+redirects to the saved intended URI or the handler's `SuccessPath`.
 
 `VerifyAuthCode` validates: RSA signature via the provider's JWKS, `exp`,
 `aud` = `ClientID`, `iss` = `Issuer`, nonce echo, `RequiredClaims` equality,

@@ -49,6 +49,7 @@ var (
 
 	InvalidFlowTicket     = &Error{Name: "InvalidFlowTicket", Code: 1300, Message: "invalid auth flow ticket"}
 	FlowTicketIssueFailed = &Error{Name: "FlowTicketIssueFailed", Code: 1301, Message: "failed to issue auth flow ticket"}
+	AuthCodeNotFound      = &Error{Name: "AuthCodeNotFound", Code: 1302, Message: "authorization code not found"} // the flow's return request carries no code
 	UserNotFound      = &Error{Name: "UserNotFound", Code: 1310, Message: "user not found"}
 	UserDisabled      = &Error{Name: "UserDisabled", Code: 1311, Message: "user disabled"}
 
