@@ -51,7 +51,7 @@ Each tick:
 - For each entry idle ≥ `cleanupOlderThan`, asks KVDB whether the
   underlying session key still exists.
 - Deletes the `SessionLocks` entry if its KVDB key is gone (TTL-expired
-  in Redis).
+  in the KVDB).
 
 The age filter keeps the work proportional to *likely-stale* entries
 rather than the total entry count.
@@ -66,9 +66,9 @@ full:
 - `BearerSessionManager` — create / destroy / extend / fetch sessions all
   function normally.
 - `CookieSessionManager` — same.
-- KVDB session rows are independent of this service's lifecycle: Redis
-  TTL keeps expiring rows on schedule whether the cleanup goroutine is
-  running or not.
+- KVDB session rows are independent of this service's lifecycle: the
+  KVDB's TTL keeps expiring rows on schedule whether the cleanup goroutine
+  is running or not.
 
 What stops: the in-process **pruning** of stale `SessionLocks` entries.
 A session that expires in KVDB during a Stop window leaves its
@@ -93,7 +93,7 @@ Same as `Stop()` for this service — halts the cleanup goroutine — plus:
 
 No in-process resources to release; the `SessionLocks` store and the
 session managers are reclaimed by GC at process exit. KVDB-side cleanup
-remains Redis's responsibility (TTL).
+remains the KVDB's responsibility (TTL).
 
 ## Operator note
 
