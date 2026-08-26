@@ -38,7 +38,7 @@ func (e *UpstreamError) Error() string { return fmt.Sprintf("auth server answere
 
 // VerifyAuthCode forwards req to the auth server's verify endpoint for
 // ProviderID and validates the returned ID token (RSA-only, `exp` required,
-// `aud` = this app's client id at the auth server, `iss` = the auth server
+// `aud` = the downstream's client id at the auth server, `iss` = the auth server
 // host) against the auth server's JWKS. Subject is the token's `sub`. The
 // auth server's token response is returned alongside for the app to keep.
 //

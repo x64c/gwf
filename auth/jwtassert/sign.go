@@ -60,3 +60,14 @@ func BodyHash(body []byte) string {
 	sum := sha256.Sum256(body)
 	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
+
+// SignRequest returns the Authorization header value for the request as
+// described: the signed assertion under the JWTAssert scheme. It is the
+// fwupstream.MachineSigner half of this method.
+func (s *Signer) SignRequest(method, requestTarget string, body []byte, extra map[string]any) (string, error) {
+	jws, err := s.Sign(method, requestTarget, body, extra)
+	if err != nil {
+		return "", err
+	}
+	return AuthorizationValue(jws), nil
+}
