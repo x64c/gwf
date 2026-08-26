@@ -95,3 +95,41 @@ func (h *Hub) StoreTokenPair(ctx context.Context, rowKey, clientID, accessTkn, r
 	}
 	return nil
 }
+
+// StoreAccessToken writes the encrypted access token for clientID on the
+// row and removes the row's refresh-token field for clientID: the shape of
+// a token that has no refresh token (a user token by machine assertion).
+// Same conditional write as StoreTokenPair — nothing is written to a row
+// that has ended.
+func (h *Hub) StoreAccessToken(ctx context.Context, rowKey, clientID, accessTkn string) *errs.Error {
+	if h == nil || h.TokenCipher == nil {
+		return errs.UpstreamTokenCipherNotSet
+	}
+	encAccess, err := h.TokenCipher.EncryptEncode([]byte(accessTkn), security.CipherContext{Location: rowKey, Field: AccessTokenField(clientID)})
+	if err != nil {
+		return errs.Upstream.WithDetail("encrypting upstream access token").WithCause(err)
+	}
+	existed, err := h.KVDB.HashSetFieldIfExists(ctx, rowKey, AccessTokenField(clientID), encAccess)
+	if err != nil {
+		return errs.KVDB.WithDetail("storing upstream access token").WithCause(err)
+	}
+	if !existed {
+		return errs.Upstream.WithDetail("session row ended before its upstream token could be stored")
+	}
+	if _, err = h.KVDB.HashRemoveFields(ctx, rowKey, RefreshTokenField(clientID)); err != nil {
+		return errs.KVDB.WithDetail("removing upstream refresh token field").WithCause(err)
+	}
+	return nil
+}
+
+// RemoveTokens removes the row's access- and refresh-token fields for
+// clientID. The row itself is untouched.
+func (h *Hub) RemoveTokens(ctx context.Context, rowKey, clientID string) *errs.Error {
+	if h == nil {
+		return errs.UpstreamTokenCipherNotSet
+	}
+	if _, err := h.KVDB.HashRemoveFields(ctx, rowKey, AccessTokenField(clientID), RefreshTokenField(clientID)); err != nil {
+		return errs.KVDB.WithDetail("removing upstream token fields").WithCause(err)
+	}
+	return nil
+}

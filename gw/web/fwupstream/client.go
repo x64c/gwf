@@ -18,6 +18,11 @@ type Client struct {
 	ID   string // internal ID
 	Conf *ClientConf
 
+	// Signer authenticates the downstream as a machine client to the upstream;
+	// set by the downstream at boot. Required by the user token exchange
+	// (ExchangeUserToken, RevokeUserToken); nil otherwise.
+	Signer MachineSigner
+
 	refreshSideloaders sync.Map // any-key → any-value; typed via per-session-package wrappers
 }
 

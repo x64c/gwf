@@ -20,7 +20,7 @@ import (
 //     c.FWUpstream.Clients[id]. Each gets a shallow clone of c.BaseHttpClient so
 //     per-client transport tweaks don't bleed across.
 //   - token_cipher (optional): the at-rest keyring for upstream OAuth tokens
-//     ({active, keys{}} — see security.KeyringConf). Present iff this app
+//     ({active, keys{}} — see security.KeyringConf). Present iff the downstream
 //     stores upstream tokens; absent for JWKS-only upstreams. Each key's
 //     "enckey" is base64-encoded 32 random master bytes (openssl rand -base64
 //     32); the working key is derived per purpose, so this keyring may share

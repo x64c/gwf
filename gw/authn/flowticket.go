@@ -18,8 +18,8 @@ const (
 )
 
 // FlowManager issues and consumes flow tickets. The cipher seals tickets
-// under a context bound to this app and the flow cookie: a ticket value
-// moved anywhere else stops decrypting.
+// under a context bound to the issuing app's name and the flow cookie: a
+// ticket value moved anywhere else stops decrypting.
 type FlowManager struct {
 	AppName string
 	Cipher  security.EncodedCipher

@@ -24,7 +24,7 @@ import (
 type SessionManager struct {
 	ClientConfs   map[string]*SessionClientConf // keyed by SessionClientConf.ID ("" key valid for clientless)
 	GroupConfs    map[string]*SessionGroupConf  // keyed by group name
-	FWUpstream    *fwupstream.Hub               // upstream subsystem; token I/O delegates here. nil iff this app has no upstream
+	FWUpstream    *fwupstream.Hub               // upstream subsystem; token I/O delegates here. nil iff no upstream configured
 	AppName      string
 	KVDB         kvdbs.DB         // holds session rows
 	SessionLocks *lockstore.Store // shared with session.Service for per-bucket cap-enforcement locks

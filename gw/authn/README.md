@@ -75,11 +75,11 @@ browser ◀─ Set-Cookie; 302 ─────────────  app
 
 | Side | Parts |
 |---|---|
-| Browser-facing app | `authn.FlowManager` · `oidc.Provider` (initiate half; `ClientSecret` empty) · `fwauthserver.Verifier{Upstream, ProviderID}` · `cookie.SessionManager` · `UserSessionData.UpstreamHub().StoreTokenPair` |
+| Browser-facing app | `authn.FlowManager` · `oidc.Provider` (initiate half; `ClientSecret` empty) · `oidc.AuthCodeRequestHandler` (login endpoint) · `fwauthserver.Verifier{Upstream, ProviderID}` · `cookie.SessionManager` · `UserSessionData.UpstreamHub().StoreTokenPair` |
 | Auth server | `oidc.Provider` (verify half; holds the client secret) · `bearer.SessionManager` (a session group per client kind; clients registered by name → opaque id) · `bearer.RefreshAccessTokenHandler` · JWKS |
 
 Configuration on the browser-facing side: `fwupstream.ClientConf` — `host`,
-`client_id` (this app's id at the auth server), `verify_external_auth_code`
+`client_id` (the browser-facing app's id at the auth server), `verify_external_auth_code`
 (verify endpoint path per IdP id), `refresh_access_token`, `jwks_url`.
 
 Session lifetime after login: the app calls the auth server as its user
@@ -108,7 +108,7 @@ browser ◀─ Set-Cookie; 302 ─────────────  app
 ```
 
 Parts: `authn.FlowManager` · `oidc.Provider` (both halves) ·
-`cookie.SessionManager`.
+`oidc.AuthCodeRequestHandler` (login endpoint) · `cookie.SessionManager`.
 
 `VerifyAuthCode` validates: RSA signature via the provider's JWKS, `exp`,
 `aud` = `ClientID`, `iss` = `Issuer`, nonce echo, `RequiredClaims` equality,
@@ -154,17 +154,17 @@ machine client and names the user in the assertion; the upstream issues a
 bearer session for that user.
 
 ```
-downstream   Signer.Sign(POST, exchange endpoint, nil, {<user claim>: uid})
+downstream   MachineSigner.SignRequest(POST, exchange endpoint, nil, {<user_claim>: uid})
 downstream ── Authorization: JWTAssert ──▶ upstream   VerifyRequest; read the user claim;
                                                       bearer.SessionManager.CreateSession(group, client, uid)
 downstream ◀─ 200 {access_token, expires_in, token_type} ─ upstream
-downstream   StoreTokenPair(access, "") on its own session row (slot keyed by its client id at the upstream)
+downstream   token stored on its own session row (slot keyed by the upstream client)
 downstream ── Authorization: Bearer ─────▶ upstream   BearerUserSession gate; the user's request
 ```
 
 | Side | Parts |
 |---|---|
-| Downstream | `jwtassert.Signer` · `fwupstream.Client` (`host`, `client_id`, token cipher) · `UserSessionData.UpstreamAccessToken` / `UpstreamHub().StoreTokenPair` · `fwupstream.Client.RequestWithBearer` |
+| Downstream | `jwtassert.Signer` as the client's `fwupstream.MachineSigner` · `fwupstream.ClientConf` (`host`, `client_id`, `token_exchange`, `token_revoke`, `user_claim`, token cipher) · `UserSessionData.UpstreamRequestWithExchangeRetriable` (cached-or-exchanged bearer, retry once on 401) · `UserSessionData.UpstreamForgetExchanged` (logout: revoke + drop) |
 | Upstream | `jwtassert.Verifier` behind `jwtassert.Gate` · `bearer.UserTokenExchangeHandler` (exchange endpoint) · `bearer.TokenRevokeHandler` (revocation endpoint) · `bearer.SessionManager` (a user-bound session group for exchanged tokens; the downstream registered under the same id in both the bearer and the jwtassert registries) · `handlerwrappers.BearerUserSession` |
 
 - The exchange and revocation handlers are `bearer`'s; their paths, the
@@ -172,15 +172,19 @@ downstream ── Authorization: Bearer ─────▶ upstream   BearerUser
   name a user (`ParseUser`) are the app's. The handlers read the verified
   identity from the request context, so they work behind the gate of any
   method that places one.
-- A minted token has no refresh token: on a cache miss or a 401 the
-  downstream mints again. `StoreTokenPair` writes only while the session row
-  exists.
+- An exchanged token has no refresh token: the row carries only the
+  access-token field for that upstream (`Hub.StoreAccessToken`), and on a
+  cache miss or a 401 the ladder exchanges again
+  (`fwupstream.RowRequestWithExchangeRetriable`, written once against
+  `TokenRow` like the refresh ladder). The token is stored only while the
+  row exists; `UpstreamForgetExchanged` removes both token fields.
 - Revocation: the downstream presents the access token to the upstream's
   revocation endpoint; `TokenRevokeHandler` destroys the session if the
   presenting client owns it (`{"revoked": true|false}`, idempotent).
 - An unreachable upstream, or its gateway answering 502/504 for it, is
   reported as `errs.UpstreamUnavailable` with the upstream's status; the
-  downstream chooses its own answer to its users.
+  downstream chooses its own answer to its users (the ladder never decides
+  it).
 
 ## Session Authentication
 

@@ -17,7 +17,7 @@ type SessionManager struct {
 	UserCookieCipher      security.EncodedCipher // present iff Conf.UserSession != nil
 	AnonymousCookieCipher security.EncodedCipher // present iff Conf.AnonymousSession != nil
 
-	FWUpstream *fwupstream.Hub // upstream subsystem; token I/O delegates here. nil iff this app has no upstream
+	FWUpstream *fwupstream.Hub // upstream subsystem; token I/O delegates here. nil iff no upstream configured
 
 	AppName      string
 	KVDB         kvdbs.DB // holds session rows

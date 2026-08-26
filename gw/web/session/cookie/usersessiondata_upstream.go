@@ -79,6 +79,23 @@ func (sd *UserSessionData[UID]) UpstreamRequestWithBearerRetriable(ctx context.C
 	return fwupstream.RowRequestWithBearerRetriable(ctx, sd, fwClient, method, endpoint, payload)
 }
 
+// UpstreamRequestWithExchangeRetriable sends the request through the
+// session's exchanged upstream bearer — the user token the upstream issued
+// for this session's user against the downstream's machine assertion — cached on
+// the row or exchanged on demand (fwClient.Signer required); on a 401 it
+// exchanges once more and retries once. The upstream's status is reported
+// as-is. See fwupstream.RowRequestWithExchangeRetriable.
+func (sd *UserSessionData[UID]) UpstreamRequestWithExchangeRetriable(ctx context.Context, fwClient *fwupstream.Client, method, endpoint string, payload *fwupstream.RequestPayload) (*http.Response, int, *errs.Error) {
+	return fwupstream.RowRequestWithExchangeRetriable(ctx, sd, fwClient, sd.UID, method, endpoint, payload)
+}
+
+// UpstreamForgetExchanged drops the session's exchanged upstream bearer,
+// revoking it at the upstream first when revoke is set. See
+// fwupstream.RowForgetExchanged.
+func (sd *UserSessionData[UID]) UpstreamForgetExchanged(ctx context.Context, fwClient *fwupstream.Client, revoke bool) *errs.Error {
+	return fwupstream.RowForgetExchanged(ctx, sd, fwClient, revoke)
+}
+
 // UpstreamRequestJSON forces Accept: application/json and delegates to the
 // retriable path. See fwupstream.RequestJSON.
 func (sd *UserSessionData[UID]) UpstreamRequestJSON(ctx context.Context, fwClient *fwupstream.Client, method, endpoint string, payload *fwupstream.RequestPayload) (*http.Response, int, *errs.Error) {
