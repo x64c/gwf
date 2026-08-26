@@ -88,6 +88,12 @@ func FindLatestKidByMtime(privateKeyDir string) (string, error) {
 	return latestKid, nil
 }
 
+// PrivateKeyPath is the path of kid's private key under privateKeyDir:
+// <privateKeyDir>/<kid>_private.pem — the naming GenerateAndSaveRSAKey writes.
+func PrivateKeyPath(privateKeyDir, kid string) string {
+	return filepath.Join(privateKeyDir, kid+"_private.pem")
+}
+
 // GenerateAndSaveRSAKey generates a new 2048-bit RSA key pair, computes a
 // short kid from the public key, and saves both PEM files at
 // <privateKeyDir>/<kid>_private.pem and <publicKeyDir>/<kid>_public.pem.
@@ -102,7 +108,7 @@ func GenerateAndSaveRSAKey(privateKeyDir, publicKeyDir string) (string, *rsa.Pub
 	if err != nil {
 		return "", nil, fmt.Errorf("failed to generate a key id: %v", err)
 	}
-	privPath := filepath.Join(privateKeyDir, kid+"_private.pem")
+	privPath := PrivateKeyPath(privateKeyDir, kid)
 	if err = SavePrivatePEMKeyLocal(privPath, privateKey); err != nil {
 		return "", nil, fmt.Errorf("failed to save private key: %v", err)
 	}

@@ -15,7 +15,7 @@ var (
 	RequestBodyTooLarge   = &Error{Name: "RequestBodyTooLarge", Code: 1001, Message: "request body too large"}               // actual body bytes exceeded limit during streaming read
 	OriginNotAllowed      = &Error{Name: "OriginNotAllowed", Code: 1010, Message: "request origin not allowed"}              // Origin header missing, or not in the configured allowlist
 	ServiceUnavailable    = &Error{Name: "ServiceUnavailable", Code: 1020, Message: "service unavailable"}                   // a service the endpoint needs is not admitted for use right now (stopped, terminating, or never wired)
-	ActionLocked          = &Error{Name: "ActionLocked", Code: 1030, Message: "action locked by another request"}           // a named action lock the endpoint needs is held; retry later
+	ActionLocked          = &Error{Name: "ActionLocked", Code: 1030, Message: "action locked by another request"}            // a named action lock the endpoint needs is held; retry later
 	InternalError         = &Error{Name: "InternalError", Code: 1050, Message: "internal server error"}
 
 	// Session
@@ -50,8 +50,8 @@ var (
 	InvalidFlowTicket     = &Error{Name: "InvalidFlowTicket", Code: 1300, Message: "invalid auth flow ticket"}
 	FlowTicketIssueFailed = &Error{Name: "FlowTicketIssueFailed", Code: 1301, Message: "failed to issue auth flow ticket"}
 	AuthCodeNotFound      = &Error{Name: "AuthCodeNotFound", Code: 1302, Message: "authorization code not found"} // the flow's return request carries no code
-	UserNotFound      = &Error{Name: "UserNotFound", Code: 1310, Message: "user not found"}
-	UserDisabled      = &Error{Name: "UserDisabled", Code: 1311, Message: "user disabled"}
+	UserNotFound          = &Error{Name: "UserNotFound", Code: 1310, Message: "user not found"}
+	UserDisabled          = &Error{Name: "UserDisabled", Code: 1311, Message: "user disabled"}
 
 	// ---- Signed assertions (machine callers)
 
@@ -65,6 +65,7 @@ var (
 	IDTokenInvalid         = &Error{Name: "IDTokenInvalid", Code: 1330, Message: "invalid id_token"}                           // signature, aud/iss/exp, malformed, unknown kid, nonce, rejected claim, no sub — detail says which
 	AuthCodeExchangeFailed = &Error{Name: "AuthCodeExchangeFailed", Code: 1331, Message: "authorization code exchange failed"} // the IdP refused the code (stale/replayed code, redirect_uri, PKCE)
 	IDPUnavailable         = &Error{Name: "IDPUnavailable", Code: 1332, Message: "identity provider unavailable"}              // JWKS / token endpoint / auth server unreachable or answering garbage
+	AuthClientMismatch     = &Error{Name: "AuthClientMismatch", Code: 1333, Message: "auth client mismatch"}                   // a verify request's auth_client_id is not the IdP client configured for the caller
 
 	// Data Format & Serialization
 

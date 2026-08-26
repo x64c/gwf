@@ -76,7 +76,7 @@ browser ◀─ Set-Cookie; 302 ─────────────  app
 | Side | Parts |
 |---|---|
 | Browser-facing app | `authn.FlowManager` · `oidc.Provider` (initiate half; `ClientSecret` empty) · `oidc.AuthCodeRequestHandler` (login endpoint) · `fwauthserver.DelegatedExchangeCallbackHandler` (callback endpoint: ticket → `fwauthserver.Verifier` → `authn.UIDStrResolver` → cookie session + token pair → `cookie.FinishLogin`) · `cookie.SessionManager` |
-| Auth server | `oidc.Provider` (verify half; holds the client secret) · `bearer.SessionManager` (a session group per client kind; clients registered by name → opaque id) · `bearer.RefreshAccessTokenHandler` · JWKS |
+| Auth server | `oidc.DelegatedExchangeAuthCodeVerifyHandler` (verify endpoint: caller by `Client-Id` → its `oidc.Provider` → `authn.UIDStrResolver` → bearer session → ID token signed with the active JWKS key, `Core.SignIDToken`) · `oidc.Provider` (verify half; holds the client secret) · `bearer.SessionManager` (a session group per client kind; clients registered by name → opaque id) · `bearer.RefreshAccessTokenHandler` · JWKS |
 
 Configuration on the browser-facing side: `fwupstream.ClientConf` — `host`,
 `client_id` (the browser-facing app's id at the auth server), `verify_external_auth_code`

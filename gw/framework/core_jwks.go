@@ -3,8 +3,13 @@ package framework
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"time"
+
+	"github.com/x64c/gwf/gw/security"
 )
 
 func (c *Core) LoadJwksServiceConf() error {
@@ -34,4 +39,23 @@ func (c *Core) ActiveKid(ctx context.Context) (string, bool, error) {
 // SetActiveKid stores kid in MainKVDB as the active JWKS key id, with no TTL.
 func (c *Core) SetActiveKid(ctx context.Context, kid string) error {
 	return c.MainKVDB.SetValuePersistent(ctx, c.activeKidKVKey(), kid)
+}
+
+// SignIDToken signs an RS256 ID token with the active JWKS key: `iss`, `sub`,
+// `email`, `aud`, `iat`, and `exp` = now + ttl; the header carries the
+// active kid. The private key is read from JwksServiceConf.PrivateKeyDir on
+// each call. Fails when no active kid is set or its key cannot be loaded.
+func (c *Core) SignIDToken(ctx context.Context, iss, sub, email, aud string, ttl time.Duration) (string, error) {
+	kid, found, err := c.ActiveKid(ctx)
+	if err != nil {
+		return "", fmt.Errorf("active kid: %w", err)
+	}
+	if !found {
+		return "", errors.New("active kid not set")
+	}
+	privateKey, err := security.LoadLocalPrivatePEMKey(security.PrivateKeyPath(c.JwksServiceConf.PrivateKeyDir, kid))
+	if err != nil {
+		return "", fmt.Errorf("active key %s: %w", kid, err)
+	}
+	return security.GenerateRSASignedJWTIDToken(iss, sub, email, aud, privateKey, kid, ttl)
 }
