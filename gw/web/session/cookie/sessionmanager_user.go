@@ -217,16 +217,28 @@ func (m *SessionManager) VerifyUserSessionCookie(ctx context.Context, r *http.Re
 	return nil
 }
 
+// UserSessionIDFromCookie returns the session id the request's user cookie
+// names: ok is false when there is no cookie or it does not decrypt. Decrypt
+// only — no row is read, nothing is written; whether the session is live is
+// not answered here.
+func (m *SessionManager) UserSessionIDFromCookie(r *http.Request) (sessionID string, ok bool) {
+	sessionCookie, err := r.Cookie(UserCookieName)
+	if err != nil {
+		return "", false
+	}
+	sessionIDBytes, err := m.UserCookieCipher.DecodeDecrypt(sessionCookie.Value, m.UserCookieCipherContext())
+	if err != nil {
+		return "", false
+	}
+	return string(sessionIDBytes), true
+}
+
 // UserLogoutRedirect clears the user cookie session (KVDB rows + cookie) and redirects
 // to the given path. KVDB cleanup is best-effort; the redirect always proceeds.
 // Caution: writes a redirect response to w; caller should not write to w afterward.
 func (m *SessionManager) UserLogoutRedirect(w http.ResponseWriter, r *http.Request, redirectPath string) {
-	sessionCookie, err := r.Cookie(UserCookieName)
-	if err == nil {
-		sessionIDBytes, err := m.UserCookieCipher.DecodeDecrypt(sessionCookie.Value, m.UserCookieCipherContext())
-		if err == nil {
-			_ = m.DeleteUserSessionKVDB(r.Context(), string(sessionIDBytes))
-		}
+	if sessionID, ok := m.UserSessionIDFromCookie(r); ok {
+		_ = m.DeleteUserSessionKVDB(r.Context(), sessionID)
 	}
 	m.DeleteUserSessionCookie(w)
 	http.Redirect(w, r, redirectPath, http.StatusSeeOther)
