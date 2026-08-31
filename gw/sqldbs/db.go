@@ -6,7 +6,7 @@ import "context"
 // Only methods shared by major SQL databases are included.
 // For driver-specific features, type-assert to the concrete DB type.
 //
-// A DB is one database, created by its Client (CreateDB) and handed out by
+// A DB is one database, prepared by its Client (PrepareDB) and handed out by
 // name (Client.DB). It embeds Executor: statements run on it directly, each
 // call complete on its own. Work that must stand or fall together goes
 // through BeginTx.

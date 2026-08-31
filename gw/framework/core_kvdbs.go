@@ -36,7 +36,7 @@ func (c *Core) PrepareKVDatabases() error {
 			return fmt.Errorf("kvdbs[%s]: unknown client", clientName)
 		}
 		for dbName, dbRawConf := range dbsConfMap {
-			if err = client.CreateDB(dbName, dbRawConf); err != nil {
+			if err = client.PrepareDB(dbName, dbRawConf); err != nil {
 				return fmt.Errorf("kvdbs[%s][%s]: %w", clientName, dbName, err)
 			}
 		}

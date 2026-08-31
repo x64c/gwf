@@ -62,6 +62,12 @@ type DB interface {
 	// rather than re-deriving the arithmetic. Constant for the life of the DB.
 	Clock() clock.Clock
 
+	// Ping checks the database answers. It reports the state at the moment it
+	// returns and nothing beyond it: a connection can die between a successful
+	// Ping and the next operation, so this is a health signal, not a guarantee
+	// to act on.
+	Ping(ctx context.Context) error
+
 	//---- Key Ops ----
 
 	Exists(ctx context.Context, key string) (bool, error)

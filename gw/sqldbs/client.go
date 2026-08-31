@@ -8,8 +8,10 @@ import (
 // Client is the common SQL database client interface.
 // Holds connection credentials and manages named databases and raw SQL stores.
 type Client interface {
-	// CreateDB - Create a named database from config
-	CreateDB(name string, conf jsontext.Value) error
+	// PrepareDB makes the database described by conf ready for use and
+	// registers it under name — the database itself already exists; this
+	// builds the handle that reaches it.
+	PrepareDB(name string, conf jsontext.Value) error
 	// DB - Get a named database
 	DB(name string) (DB, bool)
 	// Close - Close all connections

@@ -43,7 +43,7 @@ func (c *Core) PrepareSQLDatabases() error {
 			return fmt.Errorf("sqldbs[%s]: unknown client", clientName)
 		}
 		for dbName, dbRawConf := range dbsConfMap {
-			if err = client.CreateDB(dbName, dbRawConf); err != nil {
+			if err = client.PrepareDB(dbName, dbRawConf); err != nil {
 				return fmt.Errorf("sqldbs[%s][%s]: %w", clientName, dbName, err)
 			}
 		}
