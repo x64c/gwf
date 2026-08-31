@@ -1,12 +1,14 @@
 package redis
 
 import (
+	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	lowimpl "github.com/redis/go-redis/v9"
 	"github.com/x64c/gwf/gw/clock"
@@ -18,6 +20,13 @@ type ClientConf struct {
 	Host string `json:"host"`
 	Port int    `json:"port"`
 	PW   string `json:"pw"`
+
+	// InitTimeoutSecs is the deadline for EACH database's whole
+	// initialization in PrepareDB: connect + ping. REQUIRED (seconds > 0). A
+	// tolerance judgment only the deployment can make — a server on the same
+	// host may want fail-fast, one across a link or resuming from cold may
+	// need far more.
+	InitTimeoutSecs int `json:"init_timeout_secs"`
 }
 
 // DBConf holds per-database config.
@@ -32,14 +41,17 @@ type Client struct {
 	dbs  map[string]*DB
 }
 
-func NewClient(conf ClientConf) *Client {
+func NewClient(conf ClientConf) (*Client, error) {
+	if conf.InitTimeoutSecs <= 0 {
+		return nil, fmt.Errorf("redis: init_timeout_secs must be set (seconds > 0): got %d — the deployment states its tolerance", conf.InitTimeoutSecs)
+	}
 	return &Client{
 		conf: conf,
 		dbs:  make(map[string]*DB),
-	}
+	}, nil
 }
 
-func (c *Client) CreateDB(name string, rawConf jsontext.Value) error {
+func (c *Client) PrepareDB(name string, rawConf jsontext.Value) error {
 	var dbConf DBConf
 	if err := json.Unmarshal(rawConf, &dbConf); err != nil {
 		return fmt.Errorf("redis db: %w", err)
@@ -52,6 +64,17 @@ func (c *Client) CreateDB(name string, rawConf jsontext.Value) error {
 		Password: c.conf.PW,
 		DB:       dbConf.DB,
 	})
+
+	// Construction includes reaching the server: a DB is never handed out
+	// without having answered once, so a misconfigured or unreachable store
+	// fails here rather than at the first operation.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.conf.InitTimeoutSecs)*time.Second)
+	defer cancel()
+	if err := internal.Ping(ctx).Err(); err != nil {
+		_ = internal.Close()
+		return fmt.Errorf("redis db %q ping: %w", name, err)
+	}
+
 	log.Printf("[INFO] redis db %q initialized (db %d)", name, dbConf.DB)
 	c.dbs[name] = &DB{
 		internal: internal,
@@ -86,7 +109,11 @@ func PrepareClients(appRoot string, clients map[string]kvdbs.Client) error {
 		return err
 	}
 	for name, conf := range confs {
-		clients[name] = NewClient(conf)
+		client, err := NewClient(conf)
+		if err != nil {
+			return fmt.Errorf("redis client %q: %w", name, err)
+		}
+		clients[name] = client
 	}
 	return nil
 }

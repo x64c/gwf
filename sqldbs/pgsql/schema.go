@@ -8,7 +8,7 @@ import (
 )
 
 // CachedSchema is the snapshot fetched at construction or by the last
-// RefreshSchema — never nil, because CreateDB fails rather than build a DB
+// RefreshSchema — never nil, because PrepareDB fails rather than build a DB
 // without one.
 func (d *DB) CachedSchema() *sqldbs.Schema { return d.schema.Load() }
 

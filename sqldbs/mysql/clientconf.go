@@ -12,7 +12,7 @@ type ClientConf struct {
 	Pool   *PoolConf         `json:"pool"`   // REQUIRED — see PoolConf
 
 	// InitTimeoutSecs is the deadline for EACH database's whole
-	// initialization in CreateDB: connect + ping + the schema snapshot.
+	// initialization in PrepareDB: connect + ping + the schema snapshot.
 	// REQUIRED (seconds > 0). A tolerance judgment only the deployment can
 	// make — a local socket may want fail-fast, a managed server resuming
 	// from cold or a large schema over a slow link may need far more. Unset,

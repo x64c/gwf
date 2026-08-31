@@ -3,7 +3,7 @@ module github.com/x64c/gwf/auth/oidc
 go 1.27.0
 
 require (
-	github.com/x64c/gwf/gw v0.10.8
+	github.com/x64c/gwf/gw v0.11.0
 	golang.org/x/oauth2 v0.36.0
 )
 

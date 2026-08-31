@@ -45,7 +45,7 @@ func NewClient(conf ClientConf) (*Client, error) {
 	}, nil
 }
 
-func (c *Client) CreateDB(name string, rawConf jsontext.Value) error {
+func (c *Client) PrepareDB(name string, rawConf jsontext.Value) error {
 	var dbConf DBConf
 	if err := json.Unmarshal(rawConf, &dbConf); err != nil {
 		return fmt.Errorf("pgsql db: %w", err)

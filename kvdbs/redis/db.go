@@ -64,6 +64,11 @@ func (d *DB) Clock() clock.Clock {
 	return d.clock
 }
 
+// Ping checks the database answers — see kvdbs.DB.
+func (d *DB) Ping(ctx context.Context) error {
+	return d.internal.Ping(ctx).Err()
+}
+
 // lifetime is what to hand Redis for a requested ttl: the ticks that stretch
 // occupies, starting now.
 //
