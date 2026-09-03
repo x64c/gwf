@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/subtle"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,18 +19,26 @@ import (
 
 // Verifier is the receiving half: it authenticates requests carrying
 // assertions from configured clients. Build it with NewVerifier; use one
-// long-lived Verifier — it holds the replay window.
+// long-lived Verifier — its ReplayStore is what makes an assertion single-use,
+// and a Verifier built per request would remember nothing.
 type Verifier struct {
-	byID map[string]*Client // by Client.ID — the assertion's `iss`
-	seen replayWindow
+	byID   map[string]*Client // by Client.ID — the assertion's `iss`
+	replay ReplayStore
 }
 
 // NewVerifier takes the clients as configured — keyed by human name — stamps
 // each Client.Name from its key, validates it, loads its keys, and indexes the
 // clients by ID. Duplicate or empty ids fail construction: the id is what an
 // assertion names, so it must be unique.
-func NewVerifier(clients map[string]*Client) (*Verifier, error) {
-	v := &Verifier{byID: make(map[string]*Client, len(clients))}
+//
+// replay is required and is named by the caller: how far a replay window
+// reaches is a deployment's answer, not this package's, so there is nothing
+// sensible to pick on the caller's behalf. NewReplayWindow covers one process.
+func NewVerifier(clients map[string]*Client, replay ReplayStore) (*Verifier, error) {
+	if replay == nil {
+		return nil, errors.New("jwtassert.NewVerifier: replay store required")
+	}
+	v := &Verifier{byID: make(map[string]*Client, len(clients)), replay: replay}
 	for name, p := range clients {
 		p.Name = name
 		if err := p.Validate(); err != nil {
@@ -54,7 +63,7 @@ func NewVerifier(clients map[string]*Client) (*Verifier, error) {
 //
 // Every failure is one of errs.AssertionNotFound, errs.AssertionClientUnknown,
 // errs.InvalidAssertion (detail says which check), errs.AssertionReplayed,
-// or errs.RequestBodyTooLarge.
+// errs.AssertionReplayUnknown, or errs.RequestBodyTooLarge.
 func (v *Verifier) VerifyRequest(r *http.Request) (authn.VerifiedIdentity, *Client, *errs.Error) {
 	signed, e := assertionFromHeader(r)
 	if e != nil {
@@ -125,7 +134,12 @@ func (v *Verifier) VerifyRequest(r *http.Request) (authn.VerifiedIdentity, *Clie
 		return authn.VerifiedIdentity{}, nil, e
 	}
 
-	if !v.seen.admit(issuer+"\x00"+jti, exp.Add(skew)) {
+	admitted, err := v.replay.Admit(r.Context(), issuer+"\x00"+jti, exp.Add(skew))
+	if err != nil {
+		// Nothing was decided about this assertion, so it is not cleared.
+		return authn.VerifiedIdentity{}, nil, errs.AssertionReplayUnknown.Wrap(err)
+	}
+	if !admitted {
 		return authn.VerifiedIdentity{}, nil, errs.AssertionReplayed
 	}
 

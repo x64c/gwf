@@ -170,6 +170,26 @@ func (d *DB) SetValuePersistentIfNotExists(ctx context.Context, key string, valu
 	return d.internal.SetNX(ctx, key, value, 0).Result()
 }
 
+// DeleteValueIfEquals runs the comparison and the delete as one server-side
+// script (see scripts.go), so no command lands between them.
+func (d *DB) DeleteValueIfEquals(ctx context.Context, key string, expected any) (bool, error) {
+	deleted, err := scriptDeleteValueIfEquals.Run(ctx, d.internal, []string{key}, expected).Int64()
+	if err != nil {
+		return false, err
+	}
+	return deleted == 1, nil
+}
+
+// SetValueIfEquals runs the comparison and the write as one server-side
+// script (see scripts.go), so no command lands between them.
+func (d *DB) SetValueIfEquals(ctx context.Context, key string, expected any, value any) (bool, error) {
+	written, err := scriptSetValueIfEquals.Run(ctx, d.internal, []string{key}, expected, value).Int64()
+	if err != nil {
+		return false, err
+	}
+	return written == 1, nil
+}
+
 func (d *DB) IncrementValue(ctx context.Context, key string, delta int64, lifetime time.Duration) (int64, error) {
 	if lifetime < 0 {
 		return 0, fmt.Errorf("%w: %v", ErrNegativeLifetime, lifetime)
@@ -243,6 +263,26 @@ func (d *DB) ListTrim(ctx context.Context, key string, start, stop int64) error 
 	return d.internal.LTrim(ctx, key, start, stop).Err()
 }
 
+// ListPushTrimOverCap runs the push, the lifetime, and the trim as one
+// server-side script (see scripts.go), so no command lands between them.
+func (d *DB) ListPushTrimOverCap(ctx context.Context, key string, value string, capMax int64, keyTTL time.Duration) ([]string, error) {
+	if capMax <= 0 {
+		return nil, fmt.Errorf("ListPushTrimOverCap: capMax must be > 0: %d", capMax)
+	}
+	if keyTTL < 0 {
+		return nil, fmt.Errorf("%w: %v", ErrNegativeLifetime, keyTTL)
+	}
+	ttl := d.lifetime(keyTTL)
+	if ttl <= 0 {
+		return nil, fmt.Errorf("ListPushTrimOverCap: lifetime spans nothing: %v", keyTTL)
+	}
+	evicted, err := scriptListPushTrimOverCap.Run(ctx, d.internal, []string{key}, value, capMax, ttl.Milliseconds()).StringSlice()
+	if err != nil {
+		return nil, err
+	}
+	return evicted, nil
+}
+
 //---- Hash Ops ----
 
 func (d *DB) HashSetField(ctx context.Context, key string, field string, value any) error {
@@ -304,6 +344,22 @@ func (d *DB) HashSetFieldsWithKeyTTLIfExists(ctx context.Context, key string, fi
 		return false, err
 	}
 	return existed == 1, nil
+}
+
+// HashSetFieldsWithKeyTTLIfFieldEquals runs the comparison and the write as
+// one server-side script (see scripts.go), so no command lands between them.
+// A lifetime spanning nothing removes the key, and still reports true — the
+// field matched, and the write was applied by ending the key.
+func (d *DB) HashSetFieldsWithKeyTTLIfFieldEquals(ctx context.Context, key string, field string, expected any, fields map[string]any, ttl time.Duration) (bool, error) {
+	if ttl < 0 {
+		return false, fmt.Errorf("%w: %v", ErrNegativeLifetime, ttl)
+	}
+	matched, err := scriptSetFieldsWithTTLIfFieldEquals.Run(ctx, d.internal, []string{key},
+		scriptFieldArgs([]any{field, expected, d.lifetime(ttl).Milliseconds()}, fields)...).Int64()
+	if err != nil {
+		return false, err
+	}
+	return matched == 1, nil
 }
 
 func (d *DB) HashGetField(ctx context.Context, key string, field string) (string, bool, error) { // val, found, err

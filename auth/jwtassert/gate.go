@@ -16,7 +16,8 @@ import (
 // Refusals are written as JSON and the wrapped handler is not called: 401
 // with the Verifier's sentinel (AssertionNotFound, InvalidAssertion,
 // AssertionReplayed, AssertionClientUnknown), 413 RequestBodyTooLarge when
-// the body exceeds the client's MaxBodyBytes.
+// the body exceeds the client's MaxBodyBytes, 503 AssertionReplayUnknown when
+// the replay store could not answer.
 type Gate struct {
 	Verifier *Verifier
 }
@@ -29,8 +30,14 @@ func (m *Gate) Wrap(inner http.Handler) (http.Handler, error) {
 		id, _, e := m.Verifier.VerifyRequest(r)
 		if e != nil {
 			status := http.StatusUnauthorized
-			if e.IsSameCode(errs.RequestBodyTooLarge) {
+			switch {
+			case e.IsSameCode(errs.RequestBodyTooLarge):
 				status = http.StatusRequestEntityTooLarge
+			case e.IsSameCode(errs.AssertionReplayUnknown):
+				// Not an authentication verdict: nothing was decided about
+				// this caller, so 401 would name the wrong problem and invite
+				// the client to fix a credential that is fine.
+				status = http.StatusServiceUnavailable
 			}
 			responses.WriteErrorJSON(w, status, e)
 			return

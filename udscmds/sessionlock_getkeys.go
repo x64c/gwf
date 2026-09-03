@@ -6,7 +6,6 @@ import (
 
 	"github.com/x64c/gwf/gw/framework"
 	"github.com/x64c/gwf/gw/web/session"
-	"github.com/x64c/gwf/gw/web/session/lockstore"
 )
 
 type SessionlockGetKeys struct {
@@ -31,16 +30,15 @@ func (h *SessionlockGetKeys) Usage() string {
 
 func (h *SessionlockGetKeys) HandleCommand(_ []string, w io.Writer) error {
 	appCore := h.AppProvider().AppCore()
-	// Node-plane typed reach: inspection must work on a stopped service too —
-	// the lock store is passive state and survives Stop.
+	// Node-plane typed access: inspection must work on a stopped service too —
+	// the lock manager is passive state and survives Stop.
 	sessSvc, ok := appCore.SessionHandle().Node().Service().(*session.Service)
-	if !ok || sessSvc.SessionLocks == nil {
+	if !ok || sessSvc.LockingManager() == nil {
 		return fmt.Errorf("session locks not ready")
 	}
-	sessionLocks := sessSvc.SessionLocks
-	sessionLocks.Range(func(key string, _ *lockstore.LockEntry) bool {
-		_, _ = fmt.Fprintln(w, key)
-		return true
-	})
+	// Names only, as the manager reports them: what this instance holds now.
+	for _, name := range sessSvc.LockingManager().Names() {
+		_, _ = fmt.Fprintln(w, name)
+	}
 	return nil
 }
