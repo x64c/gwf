@@ -21,6 +21,9 @@ type ActionLockCookieUser[UID comparable] struct {
 
 func (m *ActionLockCookieUser[UID]) Wrap(inner http.Handler) (http.Handler, error) {
 	appCore := m.AppProvider().AppCore()
+	if err := requireActionLocks(appCore, "ActionLockCookieUser"); err != nil {
+		return nil, err
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var uidStr string
 		needsAuthUID := false

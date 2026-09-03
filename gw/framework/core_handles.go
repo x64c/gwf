@@ -51,10 +51,10 @@ func (c *Core) SessionHandle() ServiceHandle[*session.Service] {
 	return newServiceHandle(c.sessionNode, c.sessionService)
 }
 
-// ThrottleHandle returns the gated reference to the throttle service.
-func (c *Core) ThrottleHandle() ServiceHandle[*throttle.Service] {
+// ThrottleHandle returns the gated reference to the throttle limiter.
+func (c *Core) ThrottleHandle() ServiceHandle[throttle.Limiter] {
 	if c.throttleNode == nil {
-		return absentServiceHandle[*throttle.Service]()
+		return absentServiceHandle[throttle.Limiter]()
 	}
 	return newServiceHandle(c.throttleNode, c.throttleService)
 }

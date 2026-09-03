@@ -36,8 +36,8 @@ func (c *Core) PrepareWebService(conf web.ServerConf, httpHandler http.Handler) 
 	if err := conf.Validate(); err != nil {
 		return nil, err
 	}
-	if conf.DrainTimeoutSecs >= c.TerminateTimeoutSecs {
-		return nil, fmt.Errorf("drain_timeout_secs (%d) must be less than terminate_timeout_secs (%d): a full drain could never finish inside the shutdown budget", conf.DrainTimeoutSecs, c.TerminateTimeoutSecs)
+	if conf.DrainTimeoutSecs >= c.SvcTerminateTimeoutSecs {
+		return nil, fmt.Errorf("drain_timeout_secs (%d) must be less than svc_terminate_timeout_secs (%d): a full drain could never finish inside the shutdown budget", conf.DrainTimeoutSecs, c.SvcTerminateTimeoutSecs)
 	}
 	// Client-address resolution belongs to the web server — logging, audit and
 	// rate limiting all ask for it — so it is prepared here. Trusting nothing is
@@ -60,8 +60,8 @@ func (c *Core) PrepareWebService(conf web.ServerConf, httpHandler http.Handler) 
 	// service registered under a name of the app's choosing still matches, and
 	// one the app never prepared contributes no dependency at all.
 	deps := make([]ServiceDep, 0, 2)
-	if c.throttleService != nil {
-		deps = append(deps, MayUse(c.throttleService.Name()))
+	if c.throttleNode != nil {
+		deps = append(deps, MayUse(c.throttleNode.Name()))
 	}
 	if c.sessionService != nil {
 		deps = append(deps, MayUse(c.sessionService.Name()))

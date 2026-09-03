@@ -1,8 +1,12 @@
 # Throttle Service
 
 Token-bucket rate limiter. Apps register `BucketGroup`s at boot (each
-defining burst + refill rate); middleware calls `Allow(groupID, bucketID,
-now)` per request.
+defining burst + refill rate); middleware calls `Allow(ctx, groupID,
+bucketID, now)` per request.
+
+`Service` is one implementation of `Limiter`, the interface consumers hold.
+Its counters live in this process's memory, so it computes a verdict for
+every call and its error is always nil.
 
 This service consists of 2 things:
 

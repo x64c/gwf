@@ -48,7 +48,7 @@ func (c *Core) startShutdownSignalListener() {
 		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 		go func() {
 			sig := <-sigs
-			log.Printf("[INFO] got signal [%s]. shutting down app [%s] ...", sig, c.AppName)
+			log.Printf("[INFO] got signal [%s]. shutting down app [%s] ...", sig, c.appName)
 			c.RootCancel()        // step 1: broadcast cancel — see doc above
 			c.TerminateServices() // step 2: explicit per-service Terminate — see doc above
 		}()

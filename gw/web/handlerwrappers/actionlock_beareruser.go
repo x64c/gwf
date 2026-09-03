@@ -21,6 +21,9 @@ type ActionLockBearerUser[UID comparable] struct {
 
 func (m *ActionLockBearerUser[UID]) Wrap(inner http.Handler) (http.Handler, error) {
 	appCore := m.AppProvider().AppCore()
+	if err := requireActionLocks(appCore, "ActionLockBearerUser"); err != nil {
+		return nil, err
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Look up session only if any action needs the AuthUID.
 		var uidStr string

@@ -55,10 +55,11 @@ var (
 
 	// ---- Signed assertions (machine callers)
 
-	AssertionNotFound      = &Error{Name: "AssertionNotFound", Code: 1320, Message: "assertion not found"}           // no Authorization header, or not the assertion scheme
-	InvalidAssertion       = &Error{Name: "InvalidAssertion", Code: 1321, Message: "invalid assertion"}              // malformed, bad signature, claim or request-binding mismatch — detail says which
-	AssertionReplayed      = &Error{Name: "AssertionReplayed", Code: 1322, Message: "assertion replayed"}            // jti already seen inside its validity window
-	AssertionClientUnknown = &Error{Name: "AssertionClientUnknown", Code: 1323, Message: "assertion client unknown"} // iss names no configured client
+	AssertionNotFound      = &Error{Name: "AssertionNotFound", Code: 1320, Message: "assertion not found"}                 // no Authorization header, or not the assertion scheme
+	InvalidAssertion       = &Error{Name: "InvalidAssertion", Code: 1321, Message: "invalid assertion"}                    // malformed, bad signature, claim or request-binding mismatch — detail says which
+	AssertionReplayed      = &Error{Name: "AssertionReplayed", Code: 1322, Message: "assertion replayed"}                  // jti already seen inside its validity window
+	AssertionClientUnknown = &Error{Name: "AssertionClientUnknown", Code: 1323, Message: "assertion client unknown"}       // iss names no configured client
+	AssertionReplayUnknown = &Error{Name: "AssertionReplayUnknown", Code: 1324, Message: "assertion replay state unknown"} // the replay store could not answer; refused rather than admitted unchecked
 
 	// ---- External identity verification (id_token from an IdP or auth server)
 
@@ -94,10 +95,12 @@ var (
 
 	// Upstream
 
-	UpstreamAccessTokenNotFound     = &Error{Name: "UpstreamAccessTokenNotFound", Code: 1800, Message: "upstream access token not found"}   // access token missing to authenticate with an upstream server
-	UpstreamRefreshTokenNotFound    = &Error{Name: "UpstreamRefreshTokenNotFound", Code: 1801, Message: "upstream refresh token not found"} // refresh token missing to refresh an upstream access token
-	InvalidUpstreamAccessToken      = &Error{Name: "InvalidUpstreamAccessToken", Code: 1802, Message: "invalid upstream access token"}
-	InvalidUpstreamRefreshToken     = &Error{Name: "InvalidUpstreamRefreshToken", Code: 1803, Message: "invalid upstream refresh token"}
+	UpstreamAccessTokenNotFound  = &Error{Name: "UpstreamAccessTokenNotFound", Code: 1800, Message: "upstream access token not found"}   // access token missing to authenticate with an upstream server
+	UpstreamRefreshTokenNotFound = &Error{Name: "UpstreamRefreshTokenNotFound", Code: 1801, Message: "upstream refresh token not found"} // refresh token missing to refresh an upstream access token
+	InvalidUpstreamAccessToken   = &Error{Name: "InvalidUpstreamAccessToken", Code: 1802, Message: "invalid upstream access token"}
+	InvalidUpstreamRefreshToken  = &Error{Name: "InvalidUpstreamRefreshToken", Code: 1803, Message: "invalid upstream refresh token"}
+	// no usable upstream token within the caller's retry bound: a refresh in flight elsewhere did not land in time
+	UpstreamTokenRefreshFailed      = &Error{Name: "UpstreamTokenRefreshFailed", Code: 1804, Message: "upstream token refresh failed"}
 	Upstream                        = &Error{Name: "Upstream", Code: 1810, Message: "upstream error"}                                                    // failure during upstream interaction (build/transport/server)
 	UpstreamUnavailable             = &Error{Name: "UpstreamUnavailable", Code: 1811, Message: "upstream unavailable"}                                   // upstream unreachable, or its gateway answered 502/504 for it — the caller translates for its own users
 	UpstreamRefreshSideloaderNotSet = &Error{Name: "UpstreamRefreshSideloaderNotSet", Code: 1820, Message: "upstream refresh sideloader not configured"} // no refresh sideloader registered on Client for this session-data type

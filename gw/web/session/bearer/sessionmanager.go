@@ -2,6 +2,7 @@ package bearer
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -9,10 +10,10 @@ import (
 
 	"github.com/x64c/gwf/gw/errs"
 	"github.com/x64c/gwf/gw/kvdbs"
+	"github.com/x64c/gwf/gw/locking"
 	"github.com/x64c/gwf/gw/security"
 	"github.com/x64c/gwf/gw/web/fwupstream"
 	"github.com/x64c/gwf/gw/web/session/caplist"
-	"github.com/x64c/gwf/gw/web/session/lockstore"
 )
 
 // SessionManager owns bearer-session operations across all configured session groups.
@@ -22,14 +23,35 @@ import (
 // Per-name lookup is intermediate-only and not retained at runtime; group
 // data is reachable via SessionClientConf.Group back-refs.
 type SessionManager struct {
-	ClientConfs   map[string]*SessionClientConf // keyed by SessionClientConf.ID ("" key valid for clientless)
-	GroupConfs    map[string]*SessionGroupConf  // keyed by group name
-	FWUpstream    *fwupstream.Hub               // upstream subsystem; token I/O delegates here. nil iff no upstream configured
-	AppName      string
-	KVDB         kvdbs.DB         // holds session rows
-	SessionLocks *lockstore.Store // shared with session.Service for per-bucket cap-enforcement locks
+	ClientConfs    map[string]*SessionClientConf // keyed by SessionClientConf.ID ("" key valid for clientless)
+	GroupConfs     map[string]*SessionGroupConf  // keyed by group name
+	FWUpstream     *fwupstream.Hub               // upstream subsystem; token I/O delegates here. nil iff no upstream configured
+	appName        string
+	KVDB           kvdbs.DB        // holds session rows
+	lockingManager locking.Manager // set at construction; shared with session.Service; guards each session's upstream refresh
 
 	enabled atomic.Bool // the bearer protocol's on/off switch (svc.Switchable)
+}
+
+// NewSessionManager builds a SessionManager for the app named appName, over
+// kvdb, with lockingManager guarding each session's upstream refresh. The
+// app's name and the locking manager are sealed here: every row key this
+// manager writes derives from the name, and every instance of the app must
+// hold its refresh names on the same manager, so neither may change after
+// construction. The shape-specific fields — ClientConfs, GroupConfs,
+// FWUpstream — are the caller's to set. None of the three arguments may be
+// empty.
+func NewSessionManager(appName string, kvdb kvdbs.DB, lockingManager locking.Manager) (*SessionManager, error) {
+	if appName == "" {
+		return nil, errors.New("bearer.NewSessionManager: appName required")
+	}
+	if kvdb == nil {
+		return nil, errors.New("bearer.NewSessionManager: kvdb required")
+	}
+	if lockingManager == nil {
+		return nil, errors.New("bearer.NewSessionManager: lockingManager required")
+	}
+	return &SessionManager{appName: appName, KVDB: kvdb, lockingManager: lockingManager}, nil
 }
 
 // Enable / Disable / Enabled implement svc.Switchable — the bearer protocol's
@@ -44,15 +66,15 @@ func (m *SessionManager) Disable()      { m.enabled.Store(false) }
 func (m *SessionManager) Enabled() bool { return m.enabled.Load() }
 
 func (m *SessionManager) SessionRowKey(sessionID string) string {
-	return m.AppName + ":b:" + sessionID
+	return m.appName + ":b:" + sessionID
 }
 
 func (m *SessionManager) AccessTokenRowKey(tokenHash string) string {
-	return m.AppName + ":bat:" + tokenHash
+	return m.appName + ":bat:" + tokenHash
 }
 
 func (m *SessionManager) RefreshTokenRowKey(tokenHash string) string {
-	return m.AppName + ":brt:" + tokenHash
+	return m.appName + ":brt:" + tokenHash
 }
 
 // CapBucketRowKey returns the KVDB key for the session-ID list used to enforce
@@ -72,13 +94,13 @@ func (m *SessionManager) RefreshTokenRowKey(tokenHash string) string {
 //	("web", "client-a", "alice") → <AppName>:bcl:3:web:8:client-a:5:alice
 func (m *SessionManager) CapBucketRowKey(groupName string, bindValues ...string) string {
 	const tag = ":bcl"
-	n := len(m.AppName) + len(tag) + lenPrefixedSize(groupName)
+	n := len(m.appName) + len(tag) + lenPrefixedSize(groupName)
 	for _, v := range bindValues {
 		n += lenPrefixedSize(v)
 	}
 	var b strings.Builder
 	b.Grow(n)
-	b.WriteString(m.AppName)
+	b.WriteString(m.appName)
 	b.WriteString(tag)
 	writeLenPrefixed(&b, groupName)
 	for _, v := range bindValues {
@@ -152,18 +174,8 @@ func (m *SessionManager) CreateSession(
 			bucketBindValues = append(bucketBindValues, bindValues[label])
 		}
 		bucketKey := m.CapBucketRowKey(group.Name, bucketBindValues...)
-		entry := m.SessionLocks.Acquire(bucketKey)
-		entry.Lock()
-		defer entry.Unlock()
-
-		if err := m.KVDB.ListPush(ctx, bucketKey, sessionID); err != nil {
-			return "", "", "", err
-		}
-		defer func() {
-			_, _ = m.KVDB.Expire(ctx, bucketKey, refreshTTL)
-		}()
-
-		if err := caplist.EvictOverCap(ctx, m.KVDB, bucketKey, int64(group.Cap.Max), m.SessionRowKey("")); err != nil {
+		// SessionRowKey("") is the row-key prefix: each evicted session's row is deleted at prefix + sid.
+		if err := caplist.PushEvictOverCap(ctx, m.KVDB, bucketKey, sessionID, int64(group.Cap.Max), refreshTTL, m.SessionRowKey("")); err != nil {
 			return "", "", "", err
 		}
 	}
@@ -207,10 +219,6 @@ func (m *SessionManager) DestroySession(ctx context.Context, sid string) error {
 			}
 		}
 		bucketKey := m.CapBucketRowKey(group.Name, bucketBindValues...)
-		entry := m.SessionLocks.Acquire(bucketKey)
-		entry.Lock()
-		defer entry.Unlock()
-
 		_, _ = m.KVDB.ListRemove(ctx, bucketKey, 0, sid)
 	}
 
@@ -285,21 +293,12 @@ func (m *SessionManager) ExtendSession(ctx context.Context, refreshToken string)
 		return "", "", errs.RefreshTokenNotFound
 	}
 
-	// One rotation at a time per session. STEP 2's anti-replay check and the
-	// STEP 5 write that retires the token it checked are three KVDB round
-	// trips apart; unguarded, concurrent presentations of ONE refresh token
-	// all read the pre-rotation row, all pass, and all rotate — so the reuse
-	// detection below would catch only SEQUENTIAL replay. The umbrella row is
-	// fetched inside the guard, because a row read before it can be stale by
-	// the time the check runs, which is the same defect wearing a lock.
-	//
-	// Keyed by the session row, as the cap-enforcement locks are keyed by
-	// their bucket row. DestroySession takes only a bucket lock, so the
-	// replay branch below cannot deadlock against this one.
-	locker := m.SessionLocks.Acquire(m.SessionRowKey(sid))
-	locker.Lock()
-	defer locker.Unlock()
-
+	// No lock. What makes a refresh token one-shot under concurrency is STEP
+	// 5: the new hashes land only if the row's refresh hash STILL equals the
+	// one presented, in one act at the store. Concurrent presentations of ONE
+	// refresh token therefore rotate exactly once, and every other presenter
+	// is told it replayed. The row read here and the check in STEP 2 are a
+	// fast answer for a token that is already stale; STEP 5 is the arbiter.
 	row, err := m.FetchSession(ctx, sid)
 	if err != nil {
 		return "", "", errs.KVDB.WithDetail("fetching session row").WithCause(err)
@@ -352,29 +351,34 @@ func (m *SessionManager) ExtendSession(ctx context.Context, refreshToken string)
 		return "", "", errs.KVDB.WithDetail("writing new refresh token row").WithCause(err)
 	}
 
-	// STEP 5: update umbrella row's ath/rth fields + extend its TTL to refreshTTL.
-	//
-	// Conditional, because STEP 1 established the row exists and this write is
-	// two round trips later. An unconditional write would RECREATE a row that
-	// expired in between — carrying only ath/rth, no uid/cid/grp/rcs, on a full
-	// fresh lifetime — and FetchSession would then hand that back as a session
-	// with an empty principal.
+	// STEP 5: rotate the umbrella row's ath/rth and extend its TTL to
+	// refreshTTL — only if rth still equals the refresh hash presented. One
+	// act at the store, and it does two jobs: it is the anti-replay check that
+	// holds under concurrency, and, because an absent row never matches, it
+	// never RECREATES a row that expired in between — which would carry only
+	// ath/rth, no uid/cid/grp/rcs, on a fresh lifetime, and FetchSession would
+	// hand it back as a session with an empty principal.
 	umbrellaFields := map[string]any{
 		"ath": newAccessHash,
 		"rth": newRefreshHash,
 	}
-	existed, err := m.KVDB.HashSetFieldsWithKeyTTLIfExists(ctx, m.SessionRowKey(sid), umbrellaFields, refreshTTL)
+	rotated, err := m.KVDB.HashSetFieldsWithKeyTTLIfFieldEquals(ctx, m.SessionRowKey(sid), "rth", refreshHash, umbrellaFields, refreshTTL)
 	if err != nil {
-		return "", "", errs.KVDB.WithDetail("updating umbrella row").WithCause(err)
+		return "", "", errs.KVDB.WithDetail("rotating umbrella row").WithCause(err)
 	}
-	if !existed {
-		// The session ended mid-rotation. STEP 4's token rows now point at
-		// nothing, so drop them rather than leave them to time out.
+	if !rotated {
+		// Not this presentation's rotation: another presenter spent the token
+		// first, or the session ended. STEP 4's token rows point at nothing
+		// this presenter may use, so drop them rather than leave them to time
+		// out. Which of the two it was decides the answer.
 		_, _ = m.KVDB.Delete(ctx,
 			m.AccessTokenRowKey(newAccessHash),
 			m.RefreshTokenRowKey(newRefreshHash),
 		)
-		return "", "", errs.BearerSessionNotFound
+		if exists, _ := m.KVDB.Exists(ctx, m.SessionRowKey(sid)); !exists {
+			return "", "", errs.BearerSessionNotFound
+		}
+		return "", "", errs.InvalidRefreshToken.WithDetail("refresh token mismatch")
 	}
 
 	// STEP 6: delete old access + refresh token rows (cleanup); slide cap list TTL
@@ -399,4 +403,3 @@ func (m *SessionManager) ExtendSession(ctx context.Context, refreshToken string)
 
 	return newAccess, newRefresh, nil
 }
-

@@ -27,7 +27,7 @@ func (c *Core) LoadJwksServiceConf() error {
 // activeKidKVKey returns the KVDB key under which the active JWKS kid is stored.
 // Namespaced by AppName so multiple apps sharing a KVDB don't collide.
 func (c *Core) activeKidKVKey() string {
-	return c.AppName + ":kid"
+	return c.appName + ":kid"
 }
 
 // ActiveKid reads the currently active JWKS key id (kid) from MainKVDB.

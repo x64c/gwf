@@ -11,14 +11,19 @@ package caplist
 
 import (
 	"context"
+	"time"
 
 	"github.com/x64c/gwf/gw/kvdbs"
 )
 
-// EvictOverCap enforces capMax on a session-ID list. If the list size exceeds
-// the cap, the oldest sessions are evicted — both their umbrella rows in KVDB
-// AND their entries in the list — until the list size is back at the cap.
-// No-op if the list is already at or below the cap.
+// PushEvictOverCap pushes sid onto the session-ID list at listKey, gives the
+// list the lifetime keyTTL, and evicts the oldest sessions over capMax — their
+// entries in the list AND their umbrella rows in KVDB. The push, the lifetime,
+// and the list trim are one atomic act in the store, so concurrent creates
+// never evict each other's sessions and the list is never without a lifetime.
+// The umbrella rows are deleted after, which needs no atomicity: an evicted ID
+// is never pushed again, and a row that outlives a crash here carries its own
+// TTL. No lock is needed around this call.
 //
 // rowKeyPrefix maps a session ID from the list to its umbrella row's KVDB key
 // as rowKeyPrefix + sessionID. Derive it from the protocol's own row-key
@@ -26,36 +31,23 @@ import (
 // stays defined in one place. A plain string, not a function, on purpose: the
 // concat inlines, so the eviction loop compiles as the pre-hoist copies did.
 //
-// Caller MUST hold the session lock for listKey before calling. Without the
-// lock, a concurrent session-create can push a new sid between the Len read
-// and the Trim, evicting the wrong entries.
-//
 // Access/refresh token rows of evicted sessions are intentionally not deleted
 // here — they become harmless pointer rows whose lookup target (the umbrella)
 // is now missing, so requests using them fail at the umbrella-fetch step.
 // The store's TTL reclaims their memory naturally; doing it explicitly would
 // cost extra reads and deletes per evicted session for no functional benefit.
-func EvictOverCap(ctx context.Context, kvdb kvdbs.DB, listKey string, capMax int64, rowKeyPrefix string) error {
-	sessionCnt, err := kvdb.ListLen(ctx, listKey)
+func PushEvictOverCap(ctx context.Context, kvdb kvdbs.DB, listKey, sid string, capMax int64, keyTTL time.Duration, rowKeyPrefix string) error {
+	evicted, err := kvdb.ListPushTrimOverCap(ctx, listKey, sid, capMax, keyTTL)
 	if err != nil {
 		return err
 	}
-	if sessionCnt <= capMax {
+	if len(evicted) == 0 {
 		return nil
 	}
-
-	diff := sessionCnt - capMax
-	sessionsToDel, err := kvdb.ListRange(ctx, listKey, 0, diff-1)
-	if err != nil {
-		return err
-	}
-	keysToDel := make([]string, 0, len(sessionsToDel))
-	for _, sid := range sessionsToDel {
-		keysToDel = append(keysToDel, rowKeyPrefix+sid)
+	keysToDel := make([]string, 0, len(evicted))
+	for _, evictedSID := range evicted {
+		keysToDel = append(keysToDel, rowKeyPrefix+evictedSID)
 	}
 	_, _ = kvdb.Delete(ctx, keysToDel...)
-	if err = kvdb.ListTrim(ctx, listKey, diff, -1); err != nil {
-		return err
-	}
 	return nil
 }

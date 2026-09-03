@@ -1,12 +1,13 @@
 package cookie
 
 import (
+	"errors"
 	"sync/atomic"
 
 	"github.com/x64c/gwf/gw/kvdbs"
+	"github.com/x64c/gwf/gw/locking"
 	"github.com/x64c/gwf/gw/security"
 	"github.com/x64c/gwf/gw/web/fwupstream"
-	"github.com/x64c/gwf/gw/web/session/lockstore"
 )
 
 // SessionManager owns cookie-session operations across both user and anonymous shapes.
@@ -19,11 +20,32 @@ type SessionManager struct {
 
 	FWUpstream *fwupstream.Hub // upstream subsystem; token I/O delegates here. nil iff no upstream configured
 
-	AppName      string
-	KVDB         kvdbs.DB // holds session rows
-	SessionLocks *lockstore.Store
+	appName        string
+	KVDB           kvdbs.DB        // holds session rows
+	lockingManager locking.Manager // set at construction; shared with session.Service; guards each session's upstream refresh
 
 	enabled atomic.Bool // the cookie protocol's on/off switch (svc.Switchable)
+}
+
+// NewSessionManager builds a SessionManager for the app named appName, over
+// kvdb, with lockingManager guarding each session's upstream refresh. The
+// app's name and the locking manager are sealed here: every row key and every
+// cookie cipher context derives from the name, and every instance of the app
+// must hold its refresh names on the same manager, so neither may change
+// after construction. The shape-specific fields — Conf, the two ciphers,
+// FWUpstream — are the caller's to set. None of the three arguments may be
+// empty.
+func NewSessionManager(appName string, kvdb kvdbs.DB, lockingManager locking.Manager) (*SessionManager, error) {
+	if appName == "" {
+		return nil, errors.New("cookie.NewSessionManager: appName required")
+	}
+	if kvdb == nil {
+		return nil, errors.New("cookie.NewSessionManager: kvdb required")
+	}
+	if lockingManager == nil {
+		return nil, errors.New("cookie.NewSessionManager: lockingManager required")
+	}
+	return &SessionManager{appName: appName, KVDB: kvdb, lockingManager: lockingManager}, nil
 }
 
 // UserCookieCipherContext / AnonymousCookieCipherContext are the cipher
@@ -32,11 +54,11 @@ type SessionManager struct {
 // cookies from decrypting each other's. Every seal/open of a cookie value
 // goes through these — never a hand-built context.
 func (m *SessionManager) UserCookieCipherContext() security.CipherContext {
-	return security.CipherContext{App: m.AppName, Location: UserCookieName}
+	return security.CipherContext{App: m.appName, Location: UserCookieName}
 }
 
 func (m *SessionManager) AnonymousCookieCipherContext() security.CipherContext {
-	return security.CipherContext{App: m.AppName, Location: AnonymousCookieName}
+	return security.CipherContext{App: m.appName, Location: AnonymousCookieName}
 }
 
 // Enable / Disable / Enabled implement svc.Switchable — the cookie protocol's

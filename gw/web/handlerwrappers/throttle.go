@@ -37,10 +37,13 @@ func IPThrottleKey(appProvider framework.AppProviderFunc) ThrottleKeyProvider {
 // closure decides where the key comes from (session UID, session ID, IP,
 // composite, etc.) — Throttle itself is key-source-agnostic.
 //
-// The throttle service is reached through its framework handle. A limiter that
-// cannot answer must not wave traffic through, so an un-admitted service —
-// stopped by an operator, mid-teardown, or never wired — fails CLOSED: 503,
-// not a rate verdict nobody computed.
+// The limiter is reached through its framework handle. One that cannot answer
+// must not wave traffic through, so an un-admitted service — stopped by an
+// operator, mid-teardown, or never wired — fails CLOSED: 503, not a rate
+// verdict nobody computed. A limiter that is admitted but returns an error
+// fails closed the same way, for the same reason: it computed nothing either.
+// Only a limiter whose counters live outside this process can reach that
+// second branch.
 type Throttle struct {
 	AppProvider   framework.AppProviderFunc
 	BucketGroupID string
@@ -56,13 +59,13 @@ func (m *Throttle) Wrap(inner http.Handler) (http.Handler, error) {
 	// forever with nothing ever saying why. An app with no throttle service at
 	// all keeps the absent behavior: wrap proceeds, the absent handle answers
 	// 503 per request.
-	if svc, ok := throttleHandle.Node().Service().(*throttle.Service); ok {
-		if !svc.HasGroup(m.BucketGroupID) {
+	if limiter, ok := throttleHandle.Node().Service().(throttle.Limiter); ok {
+		if !limiter.HasGroup(m.BucketGroupID) {
 			return nil, fmt.Errorf("Throttle: unknown bucket group %q — set it with SetBucketGroup before building routes", m.BucketGroupID)
 		}
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		throttleSvc, ok := throttleHandle.Get()
+		limiter, ok := throttleHandle.Get()
 		if !ok {
 			responses.WriteErrorJSON(w, http.StatusServiceUnavailable, errs.ServiceUnavailable.WithDetail("throttle"))
 			return
@@ -72,7 +75,12 @@ func (m *Throttle) Wrap(inner http.Handler) (http.Handler, error) {
 			responses.WriteErrorJSON(w, http.StatusTooManyRequests, errs.RateLimited.WithDetail("throttle key extraction failed"))
 			return
 		}
-		if !throttleSvc.Allow(m.BucketGroupID, key, time.Now()) {
+		allowed, err := limiter.Allow(r.Context(), m.BucketGroupID, key, time.Now())
+		if err != nil {
+			responses.WriteErrorJSON(w, http.StatusServiceUnavailable, errs.ServiceUnavailable.WithDetail("throttle: no verdict"))
+			return
+		}
+		if !allowed {
 			responses.WriteErrorJSON(w, http.StatusTooManyRequests, errs.RateLimited)
 			return
 		}

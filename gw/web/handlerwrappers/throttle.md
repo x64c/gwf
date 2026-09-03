@@ -1,16 +1,19 @@
 # Throttle Middleware
 
 `Throttle{AppProvider, BucketGroupID, KeyProvider}` limits requests by a
-caller-defined string key. Per request it reaches the throttle service through
-its framework handle, extracts the key with `KeyProvider`, and asks
-`Allow(BucketGroupID, key, now)`. On refusal it answers HTTP 429 with the
+caller-defined string key. Per request it reaches the limiter through its
+framework handle, extracts the key with `KeyProvider`, and asks
+`Allow(ctx, BucketGroupID, key, now)`. On refusal it answers HTTP 429 with the
 structured `RateLimited` error and does not call the inner handler.
 
-The service is reached through its handle, so an un-admitted throttle service —
+The limiter is reached through its handle, so an un-admitted throttle service —
 stopped by an operator, mid-teardown, or never wired — answers HTTP 503
 `ServiceUnavailable`: a limiter that cannot compute a verdict does not pass
-traffic. An endpoint carrying this middleware is reached through the throttling
-service strictly; there is no bypass state.
+traffic. A limiter that is admitted but answers with an error gets the same 503
+(detail `throttle: no verdict`), for the same reason — only a limiter whose
+counters live outside this process can do so. An endpoint carrying this
+middleware is reached through the throttling service strictly; there is no
+bypass state.
 
 ## Key providers
 

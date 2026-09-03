@@ -24,5 +24,5 @@ func (c *Core) PrepareAuthnFlowManager() (*authn.FlowManager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("authn flow cipher: %v", err)
 	}
-	return &authn.FlowManager{AppName: c.AppName, Cipher: cipher}, nil
+	return authn.NewFlowManager(c.appName, cipher)
 }

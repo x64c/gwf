@@ -9,6 +9,11 @@ import (
 	"github.com/x64c/gwf/gw/svc"
 )
 
+// Service is the in-process Limiter: token buckets in this process's memory,
+// swept on a cycle. Several processes running the same app hold one Service
+// each, so a budget is per process, not per app.
+//
+// [ToDo] Support CrossProc mode.
 type Service struct {
 	name             string             // registered instance identity; see NewServiceAs
 	ctx              context.Context    // per-cycle runtime context (set in Start)
@@ -210,14 +215,18 @@ func (s *Service) SetBucketGroup(id string, conf *BucketConf) error {
 // now is not its to answer — reachability is decided in front of the pointer,
 // by the framework (svc.Service; consumers reach the service through a
 // framework handle). The buckets are passive state, so they survive Stop and
-// keep computing honest verdicts; a bool cannot express "unavailable", which
-// is exactly why no lifecycle answer may be folded into this one.
-func (s *Service) Allow(groupID string, bucketID string, now time.Time) bool {
+// keep computing honest verdicts, and no lifecycle answer is folded into this
+// one. The error is not the place that answer moved to: it says only that no
+// verdict could be computed, and this service — counting in its own memory —
+// always computes one, so it is always nil. ctx goes unread for the same
+// reason. Both are here because Limiter is what consumers hold, and a limiter
+// reaching a store outside this process can fail to answer at all.
+func (s *Service) Allow(ctx context.Context, groupID string, bucketID string, now time.Time) (bool, error) {
 	g, ok := s.getBucketGroup(groupID)
 	if !ok {
-		return false // Invalid groupID -> always Blocked
+		return false, nil // Invalid groupID -> always Blocked
 	}
-	return g.loadOrCreateBucket(bucketID, now).Allow(now)
+	return g.loadOrCreateBucket(bucketID, now).Allow(now), nil
 }
 
 // Inspect returns a snapshot of all BucketGroup IDs and their local Bucket IDs.

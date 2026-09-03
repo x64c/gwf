@@ -12,8 +12,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/x64c/gwf/gw/coord"
 	"github.com/x64c/gwf/gw/jobsched"
 	"github.com/x64c/gwf/gw/kvdbs"
+	"github.com/x64c/gwf/gw/locking"
 	"github.com/x64c/gwf/gw/security"
 	"github.com/x64c/gwf/gw/sqldbs"
 	"github.com/x64c/gwf/gw/storages"
@@ -27,26 +29,29 @@ import (
 )
 
 type Core struct {
-	AppName              string                                   `json:"app_name"`
-	DebugOpts            DebugOpts                                `json:"debug_opts"`             // Debug Options
-	TerminateTimeoutSecs int                                      `json:"terminate_timeout_secs"` // REQUIRED (> 0). PER-SERVICE Terminate budget (each service gets a fresh deadline, sequentially). Worst-case total = N services × this. That total must fit under the process supervisor's kill window (e.g. systemd < 90s, launchd < 20s, docker stop < 10s).
-	AppRoot              string                                   `json:"-"`                      // Filled from compiled paths
-	RootCtx              context.Context                          `json:"-"`                      // Global Context with RootCancel
-	RootCancel           context.CancelFunc                       `json:"-"`                      // CancelFunc for RootCtx
-	WebServerConf        web.ServerConf                           `json:"-"`                      // LoadWebServerConf (.web-server.json). Zero when the app runs no web service.
-	ClientIPResolver     requests.ClientIPResolver                `json:"-"`                      // PrepareWebService — derives the caller's address per the deployment's trusted proxies
-	VolatileKV           *sync.Map                                `json:"-"`                      // map[string]string
-	ActionLocks          *sync.Map                                `json:"-"`                      // map[string]struct{}
-	JwksServiceConf      security.JwksServiceConf                 `json:"-"`                      // LoadJwksServiceConf
-	BaseHttpClient       *http.Client                             `json:"-"`                      // for requests to external apis
-	RawSQLFSMap          map[string]fs.FS                         `json:"-"`                      // Set before PrepareSQLDBClients
-	SQLDBClients         map[string]sqldbs.Client                 `json:"-"`                      // PrepareSQLDBClients
-	HTMLTemplateStore    map[string]map[string]*template.Template `json:"-"`                      // PrepareHTMLTemplateStore
-	FWUpstream           *fwupstream.Hub                          `json:"-"`                      // PrepareFWUpstream (.fwupstream-web.json): FW clients + at-rest token store
-	KVDBClients          map[string]kvdbs.Client                  `json:"-"`                      // PrepareKVDBClients
-	MainKVDB             kvdbs.DB                                 `json:"-"`                      // From KVDBClients or set directly
-	LocalStorages        map[string]*storages.LocalStorage        `json:"-"`                      // PrepareStorages
-	StorageClients       map[string]storages.Client               `json:"-"`                      // PrepareStorageClients
+	// Identity — NewCore only. Unexported on purpose: what multiple launched
+	// instances must agree on may be changed neither by app code between
+	// Prepares nor by a conf key the decoder would quietly honor.
+	appName   string
+	coordMode coord.Mode
+
+	SvcTerminateTimeoutSecs int                                      `json:"svc_terminate_timeout_secs"` // REQUIRED (> 0). PER-SERVICE Terminate budget (each service gets a fresh deadline, sequentially). Worst-case total = N services × this. That total must fit under the process supervisor's kill window (e.g. systemd < 90s, launchd < 20s, docker stop < 10s).
+	AppRoot                 string                                   `json:"-"`                          // NewCore's argument: the directory holding config/
+	RootCtx                 context.Context                          `json:"-"`                          // Global Context with RootCancel
+	RootCancel              context.CancelFunc                       `json:"-"`                          // CancelFunc for RootCtx
+	WebServerConf           web.ServerConf                           `json:"-"`                          // LoadWebServerConf (.web-server.json). Zero when the app runs no web service.
+	ClientIPResolver        requests.ClientIPResolver                `json:"-"`                          // PrepareWebService — derives the caller's address per the deployment's trusted proxies
+	VolatileKV              *sync.Map                                `json:"-"`                          // map[string]string
+	JwksServiceConf         security.JwksServiceConf                 `json:"-"`                          // LoadJwksServiceConf
+	BaseHttpClient          *http.Client                             `json:"-"`                          // for requests to external apis
+	RawSQLFSMap             map[string]fs.FS                         `json:"-"`                          // Set before PrepareSQLDBClients
+	SQLDBClients            map[string]sqldbs.Client                 `json:"-"`                          // PrepareSQLDBClients
+	HTMLTemplateStore       map[string]map[string]*template.Template `json:"-"`                          // PrepareHTMLTemplateStore
+	FWUpstream              *fwupstream.Hub                          `json:"-"`                          // PrepareFWUpstream (.fwupstream-web.json): FW clients + at-rest token store
+	KVDBClients             map[string]kvdbs.Client                  `json:"-"`                          // PrepareKVDBClients
+	MainKVDB                kvdbs.DB                                 `json:"-"`                          // From KVDBClients or set directly
+	LocalStorages           map[string]*storages.LocalStorage        `json:"-"`                          // PrepareStorages
+	StorageClients          map[string]storages.Client               `json:"-"`                          // PrepareStorageClients
 
 	// internal
 	serviceGraph  serviceGraph   // services and the dependencies between them; drives start order, teardown order, and admission
@@ -60,11 +65,12 @@ type Core struct {
 	// close (svc.Service: no escape hatches). Every plane has its own path:
 	// boot wiring holds the pointer its Prepare* returned, consumers go
 	// through the *Handle accessors, operators through the node.
-	udsService          *uds.Service      // PrepareUDSService
-	jobSchedulerService *jobsched.Service // PrepareJobSchedulerService
-	webService          *web.Service      // PrepareWebService
-	sessionService      *session.Service  // PrepareSessionService, PrepareCookieSessions, PrepareBearerSessions
-	throttleService     *throttle.Service // PrepareThrottleService
+	udsService           *uds.Service      // PrepareUDSService
+	jobSchedulerService  *jobsched.Service // PrepareJobSchedulerService
+	webService           *web.Service      // PrepareWebService
+	sessionService       *session.Service  // PrepareSessionService, PrepareCookieSessions, PrepareBearerSessions
+	throttleService      throttle.Limiter  // PrepareThrottleService (the INTERFACE; see there)
+	actionLockingManager locking.Manager   // PrepareActionLocks, from the sealed mode; reached through ActionLockingManager
 
 	// Core's own services' nodes, retained at their Prepare* so the *Handle
 	// accessors (core_handles.go) can mint gated references. nil = the app
@@ -360,7 +366,7 @@ func (c *Core) terminateNode(n *ServiceNode) (err error) {
 		}
 	}()
 	n.admitted.Store(false)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.TerminateTimeoutSecs)*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(c.SvcTerminateTimeoutSecs)*time.Second)
 	defer cancel()
 	_ = n.svc.Terminate(ctx) // the error travels on the terminated channel, not here
 	select {
@@ -368,7 +374,7 @@ func (c *Core) terminateNode(n *ServiceNode) (err error) {
 		return err
 	case <-ctx.Done():
 		n.abandoned = true
-		log.Printf("[ERROR] service %q ABANDONED: no Terminated signal within %ds — whatever it depends on is now being torn down without the guarantee that it is finished with it", n.name, c.TerminateTimeoutSecs)
+		log.Printf("[ERROR] service %q ABANDONED: no Terminated signal within %ds — whatever it depends on is now being torn down without the guarantee that it is finished with it", n.name, c.SvcTerminateTimeoutSecs)
 		return fmt.Errorf("service %q abandoned: terminate deadline exceeded", n.name)
 	}
 }

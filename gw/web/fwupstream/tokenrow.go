@@ -2,8 +2,10 @@ package fwupstream
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/x64c/gwf/gw/errs"
 )
@@ -27,13 +29,25 @@ type TokenRow interface {
 	// request, from the sideloader the shape has registered on c, or
 	// UpstreamRefreshSideloaderNotSet when it has none.
 	UpstreamRefreshExtras(ctx context.Context, c *Client) (map[string]any, *errs.Error)
-	// UpstreamRefreshLocker returns the mutual exclusion guarding this row's
-	// refresh. Every request touching one row MUST get a locker for the same
-	// key from the same store — derive it from the row key, as the address to
-	// write is derived, so the two can never disagree. Any sync.Locker will
-	// do: a consumer with one row per process can return a plain *sync.Mutex.
-	UpstreamRefreshLocker() sync.Locker
+	// HoldUpstreamRefresh runs fn while this row's refresh is held: the
+	// mutual exclusion that lets one request refresh the row's token pair
+	// while the others learn of it. Refused at once, with errs.ActionLocked,
+	// while another request holds it. Every request touching one row MUST
+	// hold the same name from the same manager — derive it from the row key,
+	// as the address to write is derived, so the two can never disagree.
+	HoldUpstreamRefresh(ctx context.Context, fn func(ctx context.Context) error) error
 }
+
+// Retry is a caller's policy for obtaining a usable upstream token while a
+// refresh for the row is already in flight elsewhere: how long to leave
+// between attempts, and how many attempts after the first.
+type Retry struct {
+	Interval   time.Duration // between a refusal and the next attempt
+	Reattempts int           // attempts after the first
+}
+
+// RetriableOnceInASec tries once more, a second after a refusal.
+var RetriableOnceInASec = Retry{Interval: time.Second, Reattempts: 1}
 
 // TknSlots caches one request's upstream-token reads, keyed by client id.
 // The zero value is ready to use.
@@ -122,6 +136,7 @@ func RowRequestWithBearerRetriable[R TokenRow](
 	c *Client,
 	method, endpoint string,
 	payload *RequestPayload,
+	retry Retry,
 ) (*http.Response, int, *errs.Error) {
 	res, status, resErr := RowRequestWithBearer(ctx, row, c, method, endpoint, payload)
 	if resErr == nil {
@@ -136,26 +151,14 @@ func RowRequestWithBearerRetriable[R TokenRow](
 	}
 
 	// The access token this request just failed with, from its own slot — the
-	// value the check below is against.
+	// value every "has someone refreshed meanwhile?" check below is against.
 	staleAccess, _ := RowAccessToken(ctx, row, c.ID)
-
-	// One refresh at a time per row. An access token's expiry is a deadline
-	// shared by every request on the session, so they all reach this point at
-	// once; unguarded, each spends the same refresh token, and against an
-	// upstream that rotates them (gwf's own bearer side does) every spend but
-	// one is a replay — leaving the row holding a retired token and the next
-	// refresh reading as theft.
-	locker := row.UpstreamRefreshLocker()
-	locker.Lock()
-	defer locker.Unlock()
-
-	// Whoever waited here may find the work already done. Re-read the row —
-	// not this request's cached slot, whose whole purpose is to NOT change —
-	// and compare against the token that failed: a different one means
-	// another request refreshed while this goroutine was blocked. Adopt its
-	// pair and retry, rather than spend a refresh token a second time.
 	hub, rowKey := row.UpstreamHub(), row.UpstreamRowKey()
-	if freshAccess, freshErr := hub.FetchAccessToken(ctx, rowKey, c.ID); freshErr == nil && freshAccess != staleAccess {
+
+	// adopt takes the pair another request stored on the row — not this
+	// request's cached slot, whose whole purpose is to NOT change — and
+	// retries with it, rather than spend a refresh token a second time.
+	adopt := func(ctx context.Context, freshAccess string) (*http.Response, int, *errs.Error) {
 		row.UpstreamAccessSlots().setDone(c.ID, freshAccess)
 		if storedRefresh, storedErr := hub.FetchRefreshToken(ctx, rowKey, c.ID); storedErr == nil {
 			row.UpstreamRefreshSlots().setDone(c.ID, storedRefresh)
@@ -163,6 +166,64 @@ func RowRequestWithBearerRetriable[R TokenRow](
 		return RowRequestWithBearer(ctx, row, c, method, endpoint, payload)
 	}
 
+	// One refresh at a time per row. An access token's expiry is a deadline
+	// shared by every request on the session, so they all reach this point at
+	// once; unguarded, each spends the same refresh token, and against an
+	// upstream that rotates them (gwf's own bearer side does) every spend but
+	// one is a replay — leaving the row holding a retired token and the next
+	// refresh reading as theft. So the refresh runs under the row's hold. A
+	// request refused the hold knows a refresh is in flight elsewhere: it
+	// leaves retry.Interval, re-reads the row, adopts a pair that landed
+	// meanwhile, and otherwise asks for the hold again — retry.Reattempts
+	// times, then gives up.
+	for attempt := 0; ; attempt++ {
+		var out *http.Response
+		var outStatus int
+		var outErr *errs.Error
+		holdErr := row.HoldUpstreamRefresh(ctx, func(ctx context.Context) error {
+			// Under the hold. Whoever got here second may find the work
+			// already done: a row whose access token differs from the one
+			// that failed was refreshed by another request.
+			if freshAccess, freshErr := hub.FetchAccessToken(ctx, rowKey, c.ID); freshErr == nil && freshAccess != staleAccess {
+				out, outStatus, outErr = adopt(ctx, freshAccess)
+				return nil
+			}
+			out, outStatus, outErr = refreshAndRetry(ctx, row, c, method, endpoint, payload, hub, rowKey)
+			return nil
+		})
+		if holdErr == nil {
+			return out, outStatus, outErr
+		}
+		var e *errs.Error
+		if !errors.As(holdErr, &e) || !e.IsSameCode(errs.ActionLocked) {
+			return nil, http.StatusInternalServerError, errs.Upstream.WithDetail("holding the row's refresh").WithCause(holdErr)
+		}
+		if attempt == retry.Reattempts {
+			return nil, http.StatusServiceUnavailable, errs.UpstreamTokenRefreshFailed.WithDetail("a refresh in flight elsewhere did not land within the retry bound")
+		}
+		select {
+		case <-ctx.Done():
+			return nil, http.StatusServiceUnavailable, errs.UpstreamTokenRefreshFailed.WithCause(ctx.Err())
+		case <-time.After(retry.Interval):
+		}
+		if freshAccess, freshErr := hub.FetchAccessToken(ctx, rowKey, c.ID); freshErr == nil && freshAccess != staleAccess {
+			return adopt(ctx, freshAccess)
+		}
+	}
+}
+
+// refreshAndRetry spends the row's refresh token for a new pair, stores it on
+// the row and in this request's slots, and sends the request once more. Run
+// under the row's refresh hold only.
+func refreshAndRetry[R TokenRow](
+	ctx context.Context,
+	row R,
+	c *Client,
+	method, endpoint string,
+	payload *RequestPayload,
+	hub *Hub,
+	rowKey string,
+) (*http.Response, int, *errs.Error) {
 	refreshTkn, resErr := RowRefreshToken(ctx, row, c.ID)
 	if resErr != nil {
 		return nil, http.StatusUnauthorized, resErr

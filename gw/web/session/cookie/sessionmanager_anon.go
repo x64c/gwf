@@ -11,7 +11,7 @@ import (
 )
 
 func (m *SessionManager) AnonymousSessionRowKey(sessionID string) string {
-	return m.AppName + ":ca:" + sessionID
+	return m.appName + ":ca:" + sessionID
 }
 
 func (m *SessionManager) AnonymousSessionRowExists(ctx context.Context, sessionID string) (bool, error) {

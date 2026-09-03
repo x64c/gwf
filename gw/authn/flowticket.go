@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json/v2"
+	"errors"
 	"net/http"
 
 	"github.com/x64c/gwf/gw/errs"
@@ -21,8 +22,23 @@ const (
 // under a context bound to the issuing app's name and the flow cookie: a
 // ticket value moved anywhere else stops decrypting.
 type FlowManager struct {
-	AppName string
+	appName string
 	Cipher  security.EncodedCipher
+}
+
+// NewFlowManager builds a FlowManager for the app named appName, sealing
+// tickets with cipher. The app's name is sealed here: every ticket's cipher
+// context derives from it, so every instance of the app must carry the same
+// one, and nothing may change it after construction. Neither argument may be
+// empty.
+func NewFlowManager(appName string, cipher security.EncodedCipher) (*FlowManager, error) {
+	if appName == "" {
+		return nil, errors.New("authn.NewFlowManager: appName required")
+	}
+	if cipher == nil {
+		return nil, errors.New("authn.NewFlowManager: cipher required")
+	}
+	return &FlowManager{appName: appName, Cipher: cipher}, nil
 }
 
 // FlowTicket carries the secrets born at a flow's initiate step and consumed
@@ -107,7 +123,7 @@ func (m *FlowManager) ConsumeTicket(w http.ResponseWriter, r *http.Request, retu
 }
 
 func (m *FlowManager) cipherContext() security.CipherContext {
-	return security.CipherContext{App: m.AppName, Location: FlowCookieName}
+	return security.CipherContext{App: m.appName, Location: FlowCookieName}
 }
 
 func clearFlowCookie(w http.ResponseWriter) {

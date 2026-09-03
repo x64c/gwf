@@ -124,13 +124,12 @@ func (c *Core) PrepareBearerSessions(useFWUpstream bool) (*bearer.SessionManager
 		}
 	}
 
-	mgr := &bearer.SessionManager{
-		ClientConfs:  clientConfs,
-		GroupConfs:   groups,
-		AppName:      c.AppName,
-		KVDB:         c.MainKVDB,
-		SessionLocks: c.sessionService.SessionLocks,
+	mgr, err := bearer.NewSessionManager(c.appName, c.MainKVDB, c.sessionService.LockingManager())
+	if err != nil {
+		return nil, err
 	}
+	mgr.ClientConfs = clientConfs
+	mgr.GroupConfs = groups
 
 	// Wire the upstream subsystem only when the app declares bearer sessions
 	// store upstream tokens — and verify it was prepared, failing loud at boot.

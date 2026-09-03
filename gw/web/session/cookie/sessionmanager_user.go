@@ -12,7 +12,7 @@ import (
 )
 
 func (m *SessionManager) UserSessionRowKey(sessionID string) string {
-	return m.AppName + ":cu:" + sessionID
+	return m.appName + ":cu:" + sessionID
 }
 
 func (m *SessionManager) UserSessionRowExists(ctx context.Context, sessionID string) (bool, error) {
@@ -48,20 +48,9 @@ func (m *SessionManager) StoreUserSession(ctx context.Context, uidStr string) (s
 	}
 
 	if m.Conf.UserSession.MaxSessionsPerUser > 0 {
-		usrSessionListKey := fmt.Sprintf("%s:cul:%s", m.AppName, uidStr)
-		entry := m.SessionLocks.Acquire(usrSessionListKey)
-		entry.Lock()
-		defer entry.Unlock()
-
-		if err := m.KVDB.ListPush(ctx, usrSessionListKey, sessionID); err != nil {
-			return "", err
-		}
-
-		defer func() {
-			_, _ = m.KVDB.Expire(ctx, usrSessionListKey, slidingExpiration)
-		}()
-
-		if err := caplist.EvictOverCap(ctx, m.KVDB, usrSessionListKey, m.Conf.UserSession.MaxSessionsPerUser, m.UserSessionRowKey("")); err != nil {
+		usrSessionListKey := fmt.Sprintf("%s:cul:%s", m.appName, uidStr)
+		// UserSessionRowKey("") is the row-key prefix: each evicted session's row is deleted at prefix + sid.
+		if err := caplist.PushEvictOverCap(ctx, m.KVDB, usrSessionListKey, sessionID, m.Conf.UserSession.MaxSessionsPerUser, slidingExpiration, m.UserSessionRowKey("")); err != nil {
 			return "", err
 		}
 	}
@@ -108,11 +97,7 @@ func (m *SessionManager) DeleteUserSessionKVDB(ctx context.Context, sessionID st
 	}
 
 	if m.Conf.UserSession.MaxSessionsPerUser > 0 {
-		usrSessionListKey := fmt.Sprintf("%s:cul:%s", m.AppName, row.UID)
-		entry := m.SessionLocks.Acquire(usrSessionListKey)
-		entry.Lock()
-		defer entry.Unlock()
-
+		usrSessionListKey := fmt.Sprintf("%s:cul:%s", m.appName, row.UID)
 		_, _ = m.KVDB.ListRemove(ctx, usrSessionListKey, 0, sessionID)
 	}
 
@@ -142,7 +127,7 @@ func (m *SessionManager) ExtendUserSessionKVDB(ctx context.Context, sessionID, u
 func (m *SessionManager) ExtendUserSessionKVDBWithTTL(ctx context.Context, sessionID, uidStr string, ttl time.Duration) {
 	_, _ = m.KVDB.Expire(ctx, m.UserSessionRowKey(sessionID), ttl)
 	if m.Conf.UserSession.MaxSessionsPerUser > 0 {
-		usrSessionListKey := fmt.Sprintf("%s:cul:%s", m.AppName, uidStr)
+		usrSessionListKey := fmt.Sprintf("%s:cul:%s", m.appName, uidStr)
 		_, _ = m.KVDB.Expire(ctx, usrSessionListKey, ttl)
 	}
 }

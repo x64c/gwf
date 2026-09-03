@@ -30,7 +30,7 @@ import "log"
 // 2026-07-27): a stop that discarded work must not look identical to a clean
 // one.
 func (c *Core) Run() error {
-	log.Printf("[INFO][%s] app.Run()", c.AppName)
+	log.Printf("[INFO][%s] app.Run()", c.appName)
 	// A service panic re-raised by StartServices or WaitServicesTerminated
 	// passes through here. This frame releases what IT owns — the
 	// infrastructure clients — then lets the panic continue to main, where a

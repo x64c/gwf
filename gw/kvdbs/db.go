@@ -127,6 +127,19 @@ type DB interface {
 	// SetValuePersistentIfNotExists stores the value under key ONLY if the key
 	// does not exist, with no lifetime.
 	SetValuePersistentIfNotExists(ctx context.Context, key string, value any) (bool, error)
+	// DeleteValueIfEquals deletes key ONLY if its stored value equals expected,
+	// compared in the stored string form — the one GetValue returns. The
+	// comparison and the delete are one atomic act in the store. true = matched
+	// and deleted; false = the key is absent or holds a different value, and
+	// nothing was touched — to a caller giving back what it held under key,
+	// those two are one answer: not yours any more.
+	DeleteValueIfEquals(ctx context.Context, key string, expected any) (bool, error)
+	// SetValueIfEquals stores value under key ONLY if the stored value equals
+	// expected, compared in the stored string form; the key's lifetime, if
+	// any, is kept. The comparison and the write are one atomic act in the
+	// store. true = matched and written; false = the key is absent or holds
+	// a different value, and nothing was touched.
+	SetValueIfEquals(ctx context.Context, key string, expected any, value any) (bool, error)
 
 	// Integer interpretation — values are stored as strings; the two methods
 	// below interpret a value as a base-10 signed 64-bit integer, and error on
@@ -158,6 +171,14 @@ type DB interface {
 	ListRange(ctx context.Context, key string, start int64, stop int64) ([]string, error) // 0-basis, stop inclusive
 	ListRemove(ctx context.Context, key string, cnt int64, value any) (int64, error)      // cnt = removed dups. 0 = all
 	ListTrim(ctx context.Context, key string, start int64, stop int64) error              // 0-basis, stop inclusive
+	// ListPushTrimOverCap appends value to the list at key, gives the key the
+	// lifetime keyTTL, and, if the list is now longer than capMax, removes the
+	// oldest entries over the cap and returns them, oldest first. The push, the
+	// lifetime, and the trim are one atomic act in the store, so among
+	// concurrent pushers the list never exceeds the cap, no entry is trimmed
+	// twice, and the key is never without a lifetime. capMax must be > 0; the
+	// lifetime must span at least one mark.
+	ListPushTrimOverCap(ctx context.Context, key string, value string, capMax int64, keyTTL time.Duration) ([]string, error)
 
 	//---- Hash Ops ----
 	//
@@ -210,6 +231,15 @@ type DB interface {
 	// key's TTL, only if the key already exists, and never creates it. Reports
 	// whether the key existed. Indivisible, as HashSetFieldIfExists requires.
 	HashSetFieldsWithKeyTTLIfExists(ctx context.Context, key string, fields map[string]any, ttl time.Duration) (bool, error)
+	// HashSetFieldsWithKeyTTLIfFieldEquals atomically sets multiple fields and
+	// assigns the key's TTL, only if the key exists AND its field equals
+	// expected, compared in the stored string form; it never creates the key.
+	// Reports whether the field matched, which is whether the write happened:
+	// an absent key and a different value both answer false, untouched. The
+	// hash form of SetValueIfEquals — among concurrent callers presenting the
+	// same expected value, exactly one wins. Indivisible, as
+	// HashSetFieldIfExists requires.
+	HashSetFieldsWithKeyTTLIfFieldEquals(ctx context.Context, key string, field string, expected any, fields map[string]any, ttl time.Duration) (bool, error)
 
 	HashGetField(ctx context.Context, key string, field string) (string, bool, error) // val, found, err
 	// HashGetFields returns values of found fields. By comparing lengths, you can check if all fields are found.

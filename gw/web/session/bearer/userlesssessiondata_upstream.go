@@ -3,7 +3,6 @@ package bearer
 import (
 	"context"
 	"net/http"
-	"sync"
 
 	"github.com/x64c/gwf/gw/errs"
 	"github.com/x64c/gwf/gw/web/fwupstream"
@@ -29,12 +28,12 @@ func (sd *UserlessSessionData) UpstreamAccessSlots() *fwupstream.TknSlots { retu
 // reads.
 func (sd *UserlessSessionData) UpstreamRefreshSlots() *fwupstream.TknSlots { return &sd.upRTknSlots }
 
-// UpstreamRefreshLocker returns the per-row mutex guarding this session's
-// upstream refresh, from the store shared with session.Service. Keyed by the
-// row key — the same value UpstreamRowKey computes — so every request on this
-// session takes the same lock.
-func (sd *UserlessSessionData) UpstreamRefreshLocker() sync.Locker {
-	return sd.Mgr.SessionLocks.Acquire(sd.Mgr.SessionRowKey(sd.ID))
+// HoldUpstreamRefresh runs fn holding this session's upstream refresh, on
+// the manager shared with session.Service. Named by the row key — the same
+// value UpstreamRowKey computes — so every request on this session holds the
+// same name. Refused at once while another request holds it.
+func (sd *UserlessSessionData) HoldUpstreamRefresh(ctx context.Context, fn func(ctx context.Context) error) error {
+	return sd.Mgr.lockingManager.AcquireDoRelease(ctx, sd.Mgr.SessionRowKey(sd.ID), fn)
 }
 
 // UpstreamRefreshExtras returns the extra body fields for the refresh request,
@@ -72,12 +71,14 @@ func (sd *UserlessSessionData) UpstreamRequestWithBearer(ctx context.Context, fw
 
 // UpstreamRequestWithBearerRetriable sends the request and, on a
 // refresh-worthy auth failure (token missing locally, or upstream rejected
-// it), refreshes the token pair, updates the session row + cached slots, and
-// retries once. Refresh-request body extras come from the sideloader
-// registered via SetUserlessRefreshSideloader; without one, returns
+// it), obtains a usable token pair — refreshing it, or adopting one another
+// request refreshed meanwhile — and retries; while another request's
+// refresh is in flight it follows fwupstream.RetriableOnceInASec.
+// Refresh-request body extras come from the sideloader registered via
+// SetUserlessRefreshSideloader; without one, returns
 // UpstreamRefreshSideloaderNotSet. See fwupstream.RowRequestWithBearerRetriable.
 func (sd *UserlessSessionData) UpstreamRequestWithBearerRetriable(ctx context.Context, fwClient *fwupstream.Client, method, endpoint string, payload *fwupstream.RequestPayload) (*http.Response, int, *errs.Error) {
-	return fwupstream.RowRequestWithBearerRetriable(ctx, sd, fwClient, method, endpoint, payload)
+	return fwupstream.RowRequestWithBearerRetriable(ctx, sd, fwClient, method, endpoint, payload, fwupstream.RetriableOnceInASec)
 }
 
 // UpstreamRequestJSON forces Accept: application/json and delegates to the

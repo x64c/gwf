@@ -22,6 +22,9 @@ type ActionLockPathOnly struct {
 
 func (m *ActionLockPathOnly) Wrap(inner http.Handler) (http.Handler, error) {
 	appCore := m.AppProvider().AppCore()
+	if err := requireActionLocks(appCore, "ActionLockPathOnly"); err != nil {
+		return nil, err
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		lockKeys := make([]string, 0, len(m.Actions))
 		for action, targetKey := range m.Actions {

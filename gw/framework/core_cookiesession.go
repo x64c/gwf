@@ -57,12 +57,11 @@ func (c *Core) PrepareCookieSessions(useFWUpstream bool) (*cookie.SessionManager
 		}
 	}
 
-	mgr := &cookie.SessionManager{
-		Conf:          sessionConf,
-		AppName:       c.AppName,
-		KVDB:          c.MainKVDB,
-		SessionLocks: c.sessionService.SessionLocks,
+	mgr, err := cookie.NewSessionManager(c.appName, c.MainKVDB, c.sessionService.LockingManager())
+	if err != nil {
+		return nil, err
 	}
+	mgr.Conf = sessionConf
 
 	// Wire the upstream subsystem only when the app declares cookie sessions
 	// store upstream tokens — and verify it was prepared, failing loud at boot.
