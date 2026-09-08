@@ -4,7 +4,7 @@ go 1.27.1
 
 require (
 	github.com/redis/go-redis/v9 v9.22.0
-	github.com/x64c/gwf/gw v0.12.1
+	github.com/x64c/gwf/gw v0.12.2
 )
 
 require (
@@ -13,5 +13,5 @@ require (
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
 )
