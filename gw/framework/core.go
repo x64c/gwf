@@ -310,11 +310,7 @@ func (c *Core) TerminateServices() {
 		var wg sync.WaitGroup
 		errs := make([]error, len(level))
 		for j, n := range level {
-			wg.Add(1)
-			go func(j int, n *ServiceNode) {
-				defer wg.Done()
-				errs[j] = c.terminateNode(n)
-			}(j, n)
+			wg.Go(func() { errs[j] = c.terminateNode(n) })
 		}
 		wg.Wait() // ←── THE BARRIER: level i is fully terminated before level i+1 is touched
 		for _, err := range errs {

@@ -36,12 +36,35 @@ After `Prepare`:
 Spawns the background scheduler goroutine — a `time.Ticker` at 1-minute
 resolution. On each tick:
 - Scans `oneTimeJobs` for entries whose minute-key matches `now`,
-  dispatches each in a worker goroutine (`s.wg.Add(1)`), removes from
+  dispatches each in a worker goroutine (`s.wg.Go`), removes from
   the registry.
 - Walks `cronJobs` for entries whose spec matches `now`, dispatches each
   similarly.
 - Wraps the per-tick body in a `recover()` so a panicking job doesn't
   kill the scheduler.
+
+## Timing: minute precision, at the launch second
+
+The ticker is created when `Start` runs and fires every 60 s from that
+instant, so every tick lands at the same second of the minute — the second
+`Start` happened at. Nothing aligns it to :00. A service started at
+15:19:31 ticks at 15:20:31, 15:21:31, …; each `Stop`/`Start` cycle makes a
+new ticker, and a new reference second.
+
+What that means for a job:
+- A cron job matches on the tick's calendar minute (`Matches(now)`: minute,
+  hour, day of month, weekday), so it fires once per matching minute, at
+  the launch second — "every 5 minutes" is 15:20:31, 15:25:31, …
+- A one-time job is keyed by its minute: `AddOneTimeJob` refuses an
+  `ExecTime` less than 30 s ahead, rounds one carrying seconds UP to the
+  next whole minute, and the job fires at that minute's tick — 0 to 59 s
+  after the minute began, never before `ExecTime`.
+- Each dispatch runs the task on its own goroutine and nothing serializes
+  occurrences: a task that outlives its interval runs beside its next one.
+
+The precision is the minute; the second within it belongs to the launch.
+A particular second, or a period under a minute, is not something this
+service can give.
 
 ## Stop()
 
