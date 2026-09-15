@@ -1,38 +1,10 @@
-// Package jwtassert authenticates machine callers by self-signed, per-request
-// JWT assertions: the client signs a short-lived JWT with its private key for
-// each request, bound to that request (method, request target, body hash),
-// and the verifying side checks it against the client's public key pinned in
-// configuration. Nothing but a one-request proof ever travels; no shared
-// secret exists on either side.
-//
-// Wire form: `Authorization: JWTAssert <compact JWS>`. The assertion names
-// its client in `iss` (= `sub`), the verifying side in `aud`, and carries
-// `iat`, `exp`, `jti`, `htm` (method), `htu` (request target: path plus raw
-// query) and, when the request has a body, `body_hash` (base64url SHA-256
-// of the body). Further claims pass through to the verified identity.
-//
-// A Signer is the client half (for clients written in Go; other languages mirror
-// its output); a Verifier is the receiving half.
 package jwtassert
 
 import (
 	"errors"
 	"fmt"
 
-	"github.com/x64c/gwf/gw/authn"
 	"github.com/x64c/gwf/gw/security"
-)
-
-const Method authn.Method = "jwtassert"
-
-// AuthScheme is the Authorization header scheme carrying an assertion.
-const AuthScheme = "JWTAssert"
-
-// Claim names this package defines beyond the registered set.
-const (
-	ClaimHTTPMethod = "htm"
-	ClaimHTTPTarget = "htu"
-	ClaimBodyHash   = "body_hash"
 )
 
 // Client describes one trusted machine caller, by configuration. NewVerifier

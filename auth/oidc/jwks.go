@@ -12,39 +12,7 @@ import (
 	"github.com/x64c/gwf/gw/security"
 )
 
-// jwksRefetchMinInterval bounds how often an unknown kid may trigger a
-// refetch: within the interval an unknown kid is an error, not a fetch —
-// a stream of garbage tokens cannot turn into a request stream at the
-// provider.
-const jwksRefetchMinInterval = time.Minute
-
 var jwksHTTPClient = &http.Client{Timeout: 10 * time.Second}
-
-// keyByKID returns the provider signing key for kid, from the cached JWKS
-// when it holds the kid, refetching once on a miss (key rotation).
-func (p *Provider) keyByKID(ctx context.Context, kid string) (*rsa.PublicKey, *errs.Error) {
-	p.jwksMu.Lock()
-	defer p.jwksMu.Unlock()
-	if p.jwks != nil {
-		if jwk, err := p.jwks.GetJWKByKID(kid); err == nil {
-			return publicKeyOf(jwk)
-		}
-		if time.Since(p.jwksFetchedAt) < jwksRefetchMinInterval {
-			return nil, errs.IDTokenInvalid.WithDetail("unknown kid " + kid)
-		}
-	}
-	jwks, e := fetchJWKS(ctx, p.JWKSURL)
-	if e != nil {
-		return nil, e
-	}
-	p.jwks = jwks
-	p.jwksFetchedAt = time.Now()
-	jwk, err := jwks.GetJWKByKID(kid)
-	if err != nil {
-		return nil, errs.IDTokenInvalid.WithDetail("unknown kid " + kid)
-	}
-	return publicKeyOf(jwk)
-}
 
 func publicKeyOf(jwk *security.JWK) (*rsa.PublicKey, *errs.Error) {
 	pubKey, err := jwk.ToPublicKey()

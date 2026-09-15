@@ -1,7 +1,3 @@
-// Package svccmds provides the per-service svc-cmds (svc.CmdHandler building
-// blocks) wired into the umbrella udscmds.Svc command. Each is an autonomous
-// instance (like a middleware): it holds an AppProviderFunc and resolves its
-// live service + contexts itself at command time.
 package svccmds
 
 import (

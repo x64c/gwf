@@ -17,7 +17,7 @@ import (
 // with the Verifier's sentinel (AssertionNotFound, InvalidAssertion,
 // AssertionReplayed, AssertionClientUnknown), 413 RequestBodyTooLarge when
 // the body exceeds the client's MaxBodyBytes, 503 AssertionReplayUnknown when
-// the replay store could not answer.
+// the replay cache could not answer.
 type Gate struct {
 	Verifier *Verifier
 }

@@ -4,10 +4,22 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
+	"os"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/x64c/gwf/gw/security"
+)
+
+// AuthScheme is the Authorization header scheme carrying an assertion.
+const AuthScheme = "JWTAssert"
+
+// Claim names this package defines beyond the registered set.
+const (
+	ClaimHTTPMethod = "htm"
+	ClaimHTTPTarget = "htu"
+	ClaimBodyHash   = "body_hash"
 )
 
 // Signer is the client half: it mints one assertion per request with the
@@ -18,6 +30,27 @@ type Signer struct {
 	Kid        string          // key id of PrivateKey, as the verifier knows it
 	PrivateKey *rsa.PrivateKey // never leaves this host
 	MaxAge     time.Duration   // `exp` − `iat`; must not exceed the verifier's MaxAge
+}
+
+// NewSigner builds the Signer for one upstream from its conf and id (the
+// downstream's id at that upstream), reading the private key from
+// c.PrivateKeyPath.
+func NewSigner(c *SignerConf, id string) (*Signer, error) {
+	pemBytes, err := os.ReadFile(c.PrivateKeyPath)
+	if err != nil {
+		return nil, fmt.Errorf("jwtassert signer %s: private key: %w", c.Kid, err)
+	}
+	key, err := jwt.ParseRSAPrivateKeyFromPEM(pemBytes)
+	if err != nil {
+		return nil, fmt.Errorf("jwtassert signer %s: private key: %w", c.Kid, err)
+	}
+	return &Signer{
+		ID:         id,
+		Audience:   c.Audience,
+		Kid:        c.Kid,
+		PrivateKey: key,
+		MaxAge:     time.Duration(c.MaxAge) * time.Second,
+	}, nil
 }
 
 // Sign returns the compact JWS for one request. requestTarget is the path

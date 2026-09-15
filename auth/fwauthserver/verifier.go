@@ -1,8 +1,3 @@
-// Package fwauthserver authenticates against a framework auth server: the
-// app forwards an authorization code — with the flow secrets the initiating
-// side issued — to the auth server over its upstream client, and verifies
-// the auth server's signed ID token against the auth server's JWKS. The
-// auth server is this method's identity provider.
 package fwauthserver
 
 import (
@@ -26,15 +21,6 @@ type Verifier struct {
 	Upstream   *fwupstream.Client // the auth server
 	ProviderID string             // key into Upstream.Conf.VerifyAuthCodeEndpoints
 }
-
-// UpstreamError is a non-200 answer from the auth server, carried whole so
-// the caller can forward it.
-type UpstreamError struct {
-	StatusCode int
-	Body       []byte
-}
-
-func (e *UpstreamError) Error() string { return fmt.Sprintf("auth server answered %d", e.StatusCode) }
 
 // VerifyAuthCode forwards req to the auth server's verify endpoint for
 // ProviderID and validates the returned ID token (RSA-only, `exp` required,

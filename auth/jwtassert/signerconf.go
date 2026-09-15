@@ -6,9 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"time"
-
-	"github.com/golang-jwt/jwt/v5"
 )
 
 // SignerConf is how a downstream proves itself to one upstream as a machine
@@ -67,25 +64,4 @@ func LoadSignerConfs(appRoot string) (SignerConfs, error) {
 		}
 	}
 	return confs, nil
-}
-
-// NewSigner builds the Signer for one upstream from its conf and id (the
-// downstream's id at that upstream), reading the private key from
-// c.PrivateKeyPath.
-func NewSigner(c *SignerConf, id string) (*Signer, error) {
-	pemBytes, err := os.ReadFile(c.PrivateKeyPath)
-	if err != nil {
-		return nil, fmt.Errorf("jwtassert signer %s: private key: %w", c.Kid, err)
-	}
-	key, err := jwt.ParseRSAPrivateKeyFromPEM(pemBytes)
-	if err != nil {
-		return nil, fmt.Errorf("jwtassert signer %s: private key: %w", c.Kid, err)
-	}
-	return &Signer{
-		ID:         id,
-		Audience:   c.Audience,
-		Kid:        c.Kid,
-		PrivateKey: key,
-		MaxAge:     time.Duration(c.MaxAge) * time.Second,
-	}, nil
 }

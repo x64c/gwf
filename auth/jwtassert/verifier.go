@@ -17,13 +17,15 @@ import (
 	"github.com/x64c/gwf/gw/security"
 )
 
+const Method authn.Method = "jwtassert"
+
 // Verifier is the receiving half: it authenticates requests carrying
 // assertions from configured clients. Build it with NewVerifier; use one
-// long-lived Verifier — its ReplayStore is what makes an assertion single-use,
+// long-lived Verifier — its ReplayCache is what makes an assertion single-use,
 // and a Verifier built per request would remember nothing.
 type Verifier struct {
 	byID   map[string]*Client // by Client.ID — the assertion's `iss`
-	replay ReplayStore
+	replay ReplayCache
 }
 
 // NewVerifier takes the clients as configured — keyed by human name — stamps
@@ -31,12 +33,12 @@ type Verifier struct {
 // clients by ID. Duplicate or empty ids fail construction: the id is what an
 // assertion names, so it must be unique.
 //
-// replay is required and is named by the caller: how far a replay window
+// replay is required and is named by the caller: how far a replay cache
 // reaches is a deployment's answer, not this package's, so there is nothing
-// sensible to pick on the caller's behalf. NewReplayWindow covers one process.
-func NewVerifier(clients map[string]*Client, replay ReplayStore) (*Verifier, error) {
+// sensible to pick on the caller's behalf. NewInMemMapReplayCache covers one process.
+func NewVerifier(clients map[string]*Client, replay ReplayCache) (*Verifier, error) {
 	if replay == nil {
-		return nil, errors.New("jwtassert.NewVerifier: replay store required")
+		return nil, errors.New("jwtassert.NewVerifier: replay cache required")
 	}
 	v := &Verifier{byID: make(map[string]*Client, len(clients)), replay: replay}
 	for name, p := range clients {
