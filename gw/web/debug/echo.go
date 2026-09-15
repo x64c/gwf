@@ -1,8 +1,3 @@
-// Package debug holds request-introspection tools for development and
-// operator use. Everything here reflects request internals back to the caller
-// by design, so nothing in this package is safe on an open route: mount these
-// handlers only behind an operator/dev gate. The framework mounts nothing from
-// this package on its own.
 package debug
 
 import (

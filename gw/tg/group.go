@@ -1,8 +1,3 @@
-// Package tg provides TypedGroup: a typed, ID-keyed, order-preserving,
-// boot-frozen collection. Apps hold each group in their own typed field
-// (e.g. an LMS provider group) — the framework offers the type, not a home
-// for the instances: a type-erased central registry could answer nothing
-// typed about groups whose type parameters only the app can name.
 package tg
 
 import "fmt"

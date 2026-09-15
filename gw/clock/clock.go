@@ -1,14 +1,3 @@
-// Package clock models a clock that advances in discrete ticks.
-//
-// Every judgment about time is made at some precision and answered by where the
-// hand is, not by how much time has really passed. Am I overdue? Not if the
-// hand has not reached the mark. What time is it? 3:15 — meaning the hand is at
-// 3:15 and has not landed on 3:16. We do this constantly without calling it
-// approximation, because it is simply what reading a clock means.
-//
-// Go measures in nanoseconds, which hides that. Most systems we talk to do not:
-// one stores whole milliseconds, another whole seconds. Such a system is a
-// world with its own tick, and there is no time between its marks.
 package clock
 
 import "time"

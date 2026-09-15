@@ -10,6 +10,20 @@ import "io"
 // the runtime root context (for Start), and a per-operation context (for
 // Stop/Terminate) themselves — so Handle doesn't take them as parameters.
 //
+// The service is resolved on the NODE plane, not through a consumer handle: an
+// operator command acts on a service regardless of admission — inspecting or
+// stopping a stopped service is the point — so the service comes from its
+// ServiceNode, and "start"/"stop" go through Core's StartServiceNode and
+// StopServiceNode, which move admission together with the phase. Calling
+// Start/Stop on the raw service instead moves the phase and leaves the
+// app-level verdict behind.
+//
+// A svc-cmd is registered whether or not the app prepared its service: the
+// command set is a package-level var built at init, while the service exists
+// only after its Prepare in main. An unprepared service is therefore a normal
+// case, not a fault: Handle answers "<name> service not configured in this app"
+// and does nothing — never a panic, never a start.
+//
 // Implementations must support at least "start" and "stop" subcommands and are
 // free to add their own (e.g. session's "enable"/"disable", uds's "--force").
 type CmdHandler interface {

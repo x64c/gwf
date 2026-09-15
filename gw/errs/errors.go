@@ -59,7 +59,7 @@ var (
 	InvalidAssertion       = &Error{Name: "InvalidAssertion", Code: 1321, Message: "invalid assertion"}                    // malformed, bad signature, claim or request-binding mismatch — detail says which
 	AssertionReplayed      = &Error{Name: "AssertionReplayed", Code: 1322, Message: "assertion replayed"}                  // jti already seen inside its validity window
 	AssertionClientUnknown = &Error{Name: "AssertionClientUnknown", Code: 1323, Message: "assertion client unknown"}       // iss names no configured client
-	AssertionReplayUnknown = &Error{Name: "AssertionReplayUnknown", Code: 1324, Message: "assertion replay state unknown"} // the replay store could not answer; refused rather than admitted unchecked
+	AssertionReplayUnknown = &Error{Name: "AssertionReplayUnknown", Code: 1324, Message: "assertion replay state unknown"} // the replay cache could not answer; refused rather than admitted unchecked
 
 	// ---- External identity verification (id_token from an IdP or auth server)
 

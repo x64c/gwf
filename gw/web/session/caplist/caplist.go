@@ -1,12 +1,3 @@
-// Package caplist holds the capped session-ID list shared by the session
-// protocols: the per-principal list a protocol pushes each new session ID
-// onto, and the eviction that keeps it at its configured cap.
-//
-// These are helpers, not requirements. They assume one style of KVDB layout —
-// a list of session IDs plus one umbrella row per session at a prefixed key —
-// which is the style the built-in protocols use. A session implementation
-// with a different layout keeps its own eviction; nothing in the framework
-// checks how a cap is enforced.
 package caplist
 
 import (

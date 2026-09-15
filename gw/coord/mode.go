@@ -3,7 +3,7 @@ package coord
 import "fmt"
 
 // Mode is an app's coordination identity: where the state its instances
-// must agree on — locks, caps, replay windows, throttle budgets — lives, and
+// must agree on — locks, caps, replay caches, throttle budgets — lives, and
 // so who contends for it. It is read once, from the app's .core.json
 // ("coord_mode": "inproc" | "crossproc"), at framework.NewCore, and derived
 // from everywhere else: each Prepare* reads it and seats the matching

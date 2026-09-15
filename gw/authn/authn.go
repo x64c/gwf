@@ -1,10 +1,3 @@
-// Package authn holds the framework's authentication seam: the types every
-// authentication method produces, and the flow ticket for browser-mediated
-// multi-request flows.
-//
-// The package covers identity establishment only — proving who a caller is.
-// What an app does with an established identity (which session flavor, what
-// response shape) is the app's composition, built from the session packages.
 package authn
 
 // Method identifies the authentication method that established an identity.

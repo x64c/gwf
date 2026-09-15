@@ -144,7 +144,11 @@ client ── Authorization: JWTAssert <JWS> ──▶ app   Verifier.VerifyRequ
   to `VerifiedIdentity.Claims`. RS256.
 - Verifying side configuration: clients keyed by name, each with `id`,
   `audience`, `public_key_dir` (`<kid>_public.pem`; the stem is the kid),
-  `max_age`, `clock_skew`, `max_body_bytes`.
+  `max_age`, `clock_skew`, `max_body_bytes` —
+  `<appRoot>/config/.web-authn-jwtassert.json`, read by
+  `jwtassert.LoadClientConfs` (unknown members rejected; a file with no
+  client fails) and handed to `jwtassert.NewVerifier` with the replay cache
+  the app names.
 - Replay: `jti` is remembered until `exp`; a second presentation inside the
   window is `errs.AssertionReplayed`.
 - Failures: `errs.AssertionNotFound`, `errs.InvalidAssertion` (detail says
