@@ -32,7 +32,7 @@ func (h *ThrottlePrintBuckets) HandleCommand(_ []string, w io.Writer) error {
 	appCore := h.AppProvider().AppCore()
 	// Node-plane typed reach: inspection must work on a stopped service too —
 	// the buckets are passive state and survive Stop.
-	throttleBucketStore, ok := appCore.ThrottleHandle().Node().Service().(*throttle.Service)
+	throttleBucketStore, ok := appCore.ThrottleHandle().Node().Service().(*throttle.LimiterInMemBuckets)
 	if !ok {
 		return fmt.Errorf("throttle service not configured in this app")
 	}

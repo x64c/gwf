@@ -35,7 +35,7 @@ type Verifier struct {
 //
 // replay is required and is named by the caller: how far a replay cache
 // reaches is a deployment's answer, not this package's, so there is nothing
-// sensible to pick on the caller's behalf. NewInMemMapReplayCache covers one process.
+// sensible to pick on the caller's behalf. NewReplayCacheInMemMap covers one process.
 func NewVerifier(clients map[string]*Client, replay ReplayCache) (*Verifier, error) {
 	if replay == nil {
 		return nil, errors.New("jwtassert.NewVerifier: replay cache required")

@@ -6,21 +6,20 @@ import (
 	"time"
 )
 
-// InMemMapReplayCache is the ReplayCache in one process's memory: a map,
+// ReplayCacheInMemMap is the ReplayCache in one process's memory: a map,
 // guarded by a mutex and swept lazily. Several processes verifying the same
 // clients hold one map each, so the same assertion is admitted once per
-// process; admitting it once across them takes a cache they share.
-//
-// [ToDo] Implement CrossProc version too
-type InMemMapReplayCache struct {
+// process — which is what InProc means, and what ReplayCacheKVDB exists to
+// change.
+type ReplayCacheInMemMap struct {
 	mu        sync.Mutex
 	ids       map[string]time.Time // id → moment it may be forgotten
 	lastSweep time.Time
 }
 
-func NewInMemMapReplayCache() *InMemMapReplayCache { return &InMemMapReplayCache{} }
+func NewReplayCacheInMemMap() *ReplayCacheInMemMap { return &ReplayCacheInMemMap{} }
 
-var _ ReplayCache = (*InMemMapReplayCache)(nil)
+var _ ReplayCache = (*ReplayCacheInMemMap)(nil)
 
 // Admit records id and reports true; a second call for the same live id
 // reports false. Expired ids are swept lazily. The error is always nil — the
@@ -28,7 +27,7 @@ var _ ReplayCache = (*InMemMapReplayCache)(nil)
 // and ctx goes unread for the same reason. Both are here because ReplayCache
 // is what a Verifier holds, and a cache it reaches over a network can fail to
 // answer at all.
-func (c *InMemMapReplayCache) Admit(ctx context.Context, id string, until time.Time) (bool, error) {
+func (c *ReplayCacheInMemMap) Admit(ctx context.Context, id string, until time.Time) (bool, error) {
 	now := time.Now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
