@@ -3,7 +3,7 @@
 `Throttle{AppProvider, BucketGroupID, KeyProvider}` limits requests by a
 caller-defined string key. Per request it reaches the limiter through its
 framework handle, extracts the key with `KeyProvider`, and asks
-`Allow(ctx, BucketGroupID, key, now)`. On refusal it answers HTTP 429 with the
+`TryAdmit(ctx, BucketGroupID, key, now)`. On refusal it answers HTTP 429 with the
 structured `RateLimited` error and does not call the inner handler.
 
 The limiter is reached through its handle, so an un-admitted throttle service —

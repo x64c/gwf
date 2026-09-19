@@ -9,16 +9,14 @@ import (
 	"github.com/x64c/gwf/gw/svc"
 )
 
-// Service is the in-process Limiter: token buckets in this process's memory,
-// swept on a cycle. Several processes running the same app hold one Service
+// LimiterInMemBuckets is the in-process Limiter: token buckets in this process's memory,
+// swept on a cycle. Several processes running the same app hold one LimiterInMemBuckets
 // each, so a budget is per process, not per app.
-//
-// [ToDo] Support CrossProc mode.
-type Service struct {
-	name             string             // registered instance identity; see NewServiceAs
+type LimiterInMemBuckets struct {
+	name             string             // registered instance identity; see NewLimiterInMemBucketsAs
 	ctx              context.Context    // per-cycle runtime context (set in Start)
 	cancel           context.CancelFunc // per-cycle cancel (set in Start)
-	state            svc.AtomicState    // internal service state (read on the request path via Allow)
+	state            svc.AtomicState    // internal service state (read on the request path via TryAdmit)
 	terminated       chan error         // one-shot; fires when Terminate completes
 	stopped          chan struct{}      // per-cycle; closed when run goroutine has stopped
 	cleanupCycle     time.Duration
@@ -26,24 +24,24 @@ type Service struct {
 	groups           map[string]*BucketGroup // groupID -> *BucketGroup
 }
 
-func (s *Service) Name() string {
+func (s *LimiterInMemBuckets) Name() string {
 	return s.name
 }
 
-func (s *Service) State() svc.State {
+func (s *LimiterInMemBuckets) State() svc.State {
 	return s.state.Load()
 }
 
-func NewService(cleanupCycle time.Duration, cleanupOlderThan time.Duration) *Service {
-	return NewServiceAs("ThrottleService", cleanupCycle, cleanupOlderThan)
+func NewLimiterInMemBuckets(cleanupCycle time.Duration, cleanupOlderThan time.Duration) *LimiterInMemBuckets {
+	return NewLimiterInMemBucketsAs("ThrottleService", cleanupCycle, cleanupOlderThan)
 }
 
-// NewServiceAs is NewService with the name given explicitly. A name identifies
+// NewLimiterInMemBucketsAs is NewLimiterInMemBuckets with the name given explicitly. A name identifies
 // a registered INSTANCE, not a type: it is what logs, status output and
 // dependency declarations all refer to, and registration rejects a duplicate.
 // The string is taken raw — uniqueness and legibility are the caller's.
-func NewServiceAs(name string, cleanupCycle time.Duration, cleanupOlderThan time.Duration) *Service {
-	s := &Service{
+func NewLimiterInMemBucketsAs(name string, cleanupCycle time.Duration, cleanupOlderThan time.Duration) *LimiterInMemBuckets {
+	s := &LimiterInMemBuckets{
 		name:             name,
 		terminated:       make(chan error, 1),
 		cleanupCycle:     cleanupCycle,
@@ -56,7 +54,7 @@ func NewServiceAs(name string, cleanupCycle time.Duration, cleanupOlderThan time
 
 // Start : READY → RUNNING. parentCtx is the runtime cancellation lineage.
 // Lifecycle methods (Start/Stop/Terminate) are not safe to call concurrently.
-func (s *Service) Start(parentCtx context.Context) error {
+func (s *LimiterInMemBuckets) Start(parentCtx context.Context) error {
 	if s.state.Load() == svc.StateRUNNING {
 		return nil // idempotent
 	}
@@ -74,7 +72,7 @@ func (s *Service) Start(parentCtx context.Context) error {
 
 // Stop : RUNNING → STOPPING → READY. Synchronous on the run goroutine's exit.
 // ctx is the operation deadline.
-func (s *Service) Stop(ctx context.Context) error {
+func (s *LimiterInMemBuckets) Stop(ctx context.Context) error {
 	if s.state.Load() == svc.StateREADY {
 		return nil // idempotent
 	}
@@ -90,7 +88,7 @@ func (s *Service) Stop(ctx context.Context) error {
 // the full stop activity. If STOPPING (Stop already canceled, possibly
 // timed out), just waits for the run goroutine to actually exit. Fires
 // Terminated when complete.
-func (s *Service) Terminate(ctx context.Context) (err error) {
+func (s *LimiterInMemBuckets) Terminate(ctx context.Context) (err error) {
 	if s.state.Load() == svc.StateTERMINATING {
 		return nil // idempotent — returns before the defer arms
 	}
@@ -116,7 +114,7 @@ func (s *Service) Terminate(ctx context.Context) (err error) {
 
 // stop runs the full stop activity: log "Stopping.", cancel, waitStopped.
 // Called by Stop and by Terminate (when prior state was RUNNING).
-func (s *Service) stop(ctx context.Context) error {
+func (s *LimiterInMemBuckets) stop(ctx context.Context) error {
 	log.Printf("[INFO][%s] Stopping.", s.Name())
 	s.cancel()
 	return s.waitStopped(ctx)
@@ -125,7 +123,7 @@ func (s *Service) stop(ctx context.Context) error {
 // waitStopped waits for the run goroutine to exit; logs "Stopped." on success.
 // Called by stop() and by Terminate (when prior state was STOPPING — cancel
 // was already issued by the in-flight Stop, which may have ctx-timed out).
-func (s *Service) waitStopped(ctx context.Context) error {
+func (s *LimiterInMemBuckets) waitStopped(ctx context.Context) error {
 	select {
 	case <-s.stopped:
 		log.Printf("[INFO][%s] Stopped.", s.Name())
@@ -135,11 +133,11 @@ func (s *Service) waitStopped(ctx context.Context) error {
 	}
 }
 
-func (s *Service) Terminated() <-chan error {
+func (s *LimiterInMemBuckets) Terminated() <-chan error {
 	return s.terminated
 }
 
-func (s *Service) run() {
+func (s *LimiterInMemBuckets) run() {
 	ticker := time.NewTicker(s.cleanupCycle)
 	defer ticker.Stop()
 	defer close(s.stopped)       // declared 2nd → runs 2nd-to-last (after transitionAfterRun)
@@ -165,7 +163,7 @@ func (s *Service) run() {
 // transitionAfterRun moves the state out of STOPPING into READY once the run
 // goroutine has exited. If state is TERMINATING, Terminate's flow handles the
 // rest — we leave the state alone.
-func (s *Service) transitionAfterRun() {
+func (s *LimiterInMemBuckets) transitionAfterRun() {
 	if s.state.Load() == svc.StateSTOPPING {
 		s.state.Store(svc.StateREADY)
 	}
@@ -174,9 +172,9 @@ func (s *Service) transitionAfterRun() {
 // getBucketGroup is internal on purpose: a *BucketGroup reaches live buckets,
 // and a live bucket escaping through an exported accessor is callable behind
 // the admission gate for the life of the process (svc.Service: no escape
-// hatches). External callers get Allow (the verdict), HasGroup (the boot-time
+// hatches). External callers get TryAdmit (the verdict), HasGroup (the boot-time
 // existence question) and Inspect (a snapshot).
-func (s *Service) getBucketGroup(id string) (*BucketGroup, bool) {
+func (s *LimiterInMemBuckets) getBucketGroup(id string) (*BucketGroup, bool) {
 	g, ok := s.groups[id]
 	return g, ok
 }
@@ -185,7 +183,7 @@ func (s *Service) getBucketGroup(id string) (*BucketGroup, bool) {
 // boot wiring (see SetBucketGroup), so after Start the answer is stable — this
 // is what lets a wrapper validate its group id at wrap time and turn a mistype
 // into a named boot failure instead of a permanently dead route.
-func (s *Service) HasGroup(id string) bool {
+func (s *LimiterInMemBuckets) HasGroup(id string) bool {
 	_, ok := s.groups[id]
 	return ok
 }
@@ -197,7 +195,7 @@ func (s *Service) HasGroup(id string) bool {
 // refusal, not a process kill: the sequencing mistake is the caller's, and a
 // boot-time caller keeps fail-fast at its own call site by treating the error
 // as fatal there.
-func (s *Service) SetBucketGroup(id string, conf *BucketConf) error {
+func (s *LimiterInMemBuckets) SetBucketGroup(id string, conf *BucketConf) error {
 	if state := s.state.Load(); state != svc.StateREADY {
 		return fmt.Errorf("throttle %q: can't set bucket group %q: state is %v — groups are boot wiring, set before Start", s.Name(), id, state)
 	}
@@ -208,10 +206,11 @@ func (s *Service) SetBucketGroup(id string, conf *BucketConf) error {
 	return nil
 }
 
-// Allow reports the bucket's verdict for one use of bucketID within groupID.
+// TryAdmit takes one token for bucketID within groupID and reports whether it got
+// one — the verdict for one use.
 // An unknown groupID is always blocked.
 //
-// Allow answers the RATE question only. Whether this service may be used right
+// TryAdmit answers the RATE question only. Whether this service may be used right
 // now is not its to answer — reachability is decided in front of the pointer,
 // by the framework (svc.Service; consumers reach the service through a
 // framework handle). The buckets are passive state, so they survive Stop and
@@ -221,18 +220,18 @@ func (s *Service) SetBucketGroup(id string, conf *BucketConf) error {
 // always computes one, so it is always nil. ctx goes unread for the same
 // reason. Both are here because Limiter is what consumers hold, and a limiter
 // reaching a store outside this process can fail to answer at all.
-func (s *Service) Allow(ctx context.Context, groupID string, bucketID string, now time.Time) (bool, error) {
+func (s *LimiterInMemBuckets) TryAdmit(ctx context.Context, groupID string, bucketID string, now time.Time) (bool, error) {
 	g, ok := s.getBucketGroup(groupID)
 	if !ok {
 		return false, nil // Invalid groupID -> always Blocked
 	}
-	return g.loadOrCreateBucket(bucketID, now).Allow(now), nil
+	return g.loadOrCreateBucket(bucketID, now).TryAdmit(now), nil
 }
 
 // Inspect returns a snapshot of all BucketGroup IDs and their local Bucket IDs.
 // It does not lock globally, so results may be slightly inconsistent
 // if buckets are being modified concurrently — which is fine for inspection.
-func (s *Service) Inspect() map[string][]string {
+func (s *LimiterInMemBuckets) Inspect() map[string][]string {
 	result := make(map[string][]string)
 
 	for groupID, bucketGroup := range s.groups {
@@ -245,4 +244,22 @@ func (s *Service) Inspect() map[string][]string {
 	}
 
 	return result
+}
+
+// cleanup removes every bucket untouched for longer than cleanupOlderThan. A
+// bucket carries no state worth keeping once it would have refilled, so dropping
+// it and creating it full on the next sight are the same thing.
+func (s *LimiterInMemBuckets) cleanup(now time.Time) {
+	for _, g := range s.groups {
+		g.buckets.rangeAll(func(id string, b *Bucket) bool {
+			// lock per bucket while checking/removing
+			b.mu.Lock()
+			last := b.lastCheck
+			b.mu.Unlock()
+			if now.Sub(last) > s.cleanupOlderThan {
+				g.buckets.remove(id)
+			}
+			return true // continue iteration
+		})
+	}
 }

@@ -1,18 +1,18 @@
-# Throttle Service
+# Throttle LimiterInMemBuckets
 
 Token-bucket rate limiter. Apps register `BucketGroup`s at boot (each
-defining burst + refill rate); middleware calls `Allow(ctx, groupID,
+defining burst + refill rate); middleware calls `TryAdmit(ctx, groupID,
 bucketID, now)` per request.
 
-`Service` is one implementation of `Limiter`, the interface consumers hold.
+`LimiterInMemBuckets` is one implementation of `Limiter`, the interface consumers hold.
 Its counters live in this process's memory, so it computes a verdict for
 every call and its error is always nil.
 
 This service consists of 2 things:
 
-1. **Throttle bucket system** — `groups` map + `Allow()`/`GetBucket()`/
+1. **Throttle bucket system** — `groups` map + `TryAdmit()`/`GetBucket()`/
    `SetBucketGroup()`/`Inspect()`. The data and the request-path API.
-   `Allow` creates a bucket on first sight of an id, atomically
+   `TryAdmit` creates a bucket on first sight of an id, atomically
    (`LoadOrStore`), so concurrent first requests share one bucket rather
    than each getting a full burst.
 2. **Background cleanup service** — a goroutine that periodically prunes
@@ -25,10 +25,10 @@ the lifetime of the process.
 ## Prepare
 
 `Core.PrepareThrottleService(cleanupCycle, cleanupOlderThan)`:
-- Constructs the Service (`NewService`) with the given cleanup-cycle and
+- Constructs the LimiterInMemBuckets (`NewLimiterInMemBuckets`) with the given cleanup-cycle and
   idle-bucket-expiry config.
 - Initialises the `groups map[string]*BucketGroup` (empty).
-- Registers the Service with `Core.RegisterService`, which places it in the
+- Registers the LimiterInMemBuckets with `Core.RegisterService`, which places it in the
   composition graph the start and terminate walks follow.
 
 After `Prepare`, the app registers concrete bucket groups via
@@ -51,10 +51,10 @@ surface — there is nothing else the service runs in the background.
 Just that cleanup goroutine.
 
 The data plane keeps working:
-- `Allow()` continues to throttle requests using whatever the `groups`
+- `TryAdmit()` continues to throttle requests using whatever the `groups`
   map currently holds.
 - Existing `*Bucket`s continue to fill/drain at their configured rates.
-- New `*Bucket`s are still created lazily by `Allow()` on first hit per
+- New `*Bucket`s are still created lazily by `TryAdmit()` on first hit per
   bucketID.
 
 The only observable change while stopped: stale buckets stop being
@@ -79,18 +79,15 @@ by GC at process exit.
 
 ## Operator note
 
-"Stop throttle" ≠ "pause the limiter." Stop halts background cleanup, and
-the data plane keeps its buckets — but `Allow` opens with
-`state != RUNNING → return true`, so a stopped service **admits
-everything**. Stopping it does not preserve the limit; it removes it.
+"Stop throttle" ≠ "pause the limiter." Stop halts background cleanup; the
+buckets stay and `TryAdmit` keeps computing honest verdicts, because they are
+passive state and no lifecycle answer is folded into the rate verdict. Whether
+this limiter may be used at all is decided in front of the pointer, by the
+framework handle a consumer holds it through (`Framework Service Composition
+Graph` §11.1).
 
-That fail-open verdict is a defect, not a feature: `Allow` returns a bare
-`bool`, which cannot express "I cannot evaluate this", so it answers
-wrongly by construction whichever way it picks. The fix is for callers to
-be gated in front of the service rather than for the service to judge its
-own availability — see the handle-acquisition question in
-`Framework Service Composition Graph` §11.1. Until that lands, treat
-`svc stop throttle` as disabling rate limiting.
+So a stopped limiter keeps refusing what is over its limit; what stops is the
+sweeping of idle buckets, which then live until Start resumes it.
 
 ## Guarantee scope: one process
 

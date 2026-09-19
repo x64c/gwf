@@ -75,7 +75,7 @@ func (m *Throttle) Wrap(inner http.Handler) (http.Handler, error) {
 			responses.WriteErrorJSON(w, http.StatusTooManyRequests, errs.RateLimited.WithDetail("throttle key extraction failed"))
 			return
 		}
-		allowed, err := limiter.Allow(r.Context(), m.BucketGroupID, key, time.Now())
+		allowed, err := limiter.TryAdmit(r.Context(), m.BucketGroupID, key, time.Now())
 		if err != nil {
 			responses.WriteErrorJSON(w, http.StatusServiceUnavailable, errs.ServiceUnavailable.WithDetail("throttle: no verdict"))
 			return

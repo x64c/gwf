@@ -27,7 +27,7 @@ func (b *Bucket) refill(now time.Time) {
 	}
 }
 
-func (b *Bucket) Allow(now time.Time) bool {
+func (b *Bucket) TryAdmit(now time.Time) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
