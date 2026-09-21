@@ -169,11 +169,11 @@ func RowRequestWithBearerRetriable[R TokenRow](
 	// One refresh at a time per row. An access token's expiry is a deadline
 	// shared by every request on the session, so they all reach this point at
 	// once; unguarded, each spends the same refresh token, and against an
-	// upstream that rotates them (gwf's own bearer side does) every spend but
-	// one is a replay — leaving the row holding a retired token and the next
-	// refresh reading as theft. So the refresh runs under the row's hold. A
-	// request refused the hold knows a refresh is in flight elsewhere: it
-	// leaves retry.Interval, re-reads the row, adopts a pair that landed
+	// upstream that rotates them (this framework's own bearer side does) every
+	// spend but one is a replay — leaving the row holding a retired token and
+	// the next refresh reading as theft. So the refresh runs under the row's
+	// hold. A request refused the hold knows a refresh is in flight elsewhere:
+	// it leaves retry.Interval, re-reads the row, adopts a pair that landed
 	// meanwhile, and otherwise asks for the hold again — retry.Reattempts
 	// times, then gives up.
 	for attempt := 0; ; attempt++ {

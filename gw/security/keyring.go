@@ -37,24 +37,41 @@ type KeyringKeyConf struct {
 // its CipherContext. Ciphertext form: "<kid>.<encoded>" — the key id rides in
 // the clear (it is an identifier, not key material; cf. JWKS kid).
 //
-// Each instance serves ONE purpose (e.g. "upstream-token"): its working keys
-// are HKDF-derived from the conf's master keys with the purpose as the info
-// label, so two purposes built from the same conf are cryptographically
-// distinct ciphers — a reused or shared master key cannot make their values
-// interchangeable.
+// Each instance serves ONE app and ONE purpose (e.g. "upstream-token"): its
+// working keys are HKDF-derived from the conf's master keys with "<app>:<purpose>"
+// as the info label, so two purposes — or two apps — built from the same conf
+// are cryptographically distinct ciphers. A reused or shared master key cannot
+// make their values interchangeable.
+//
+// That label is part of the ciphertext format, not a description of it: HKDF is
+// deterministic, so changing either half derives different keys and every value
+// already sealed stops opening, reported as a failure under its key id. Renaming
+// an app therefore orphans its sealed values, as it already orphans its stored
+// rows.
 type KeyringCipher struct {
+	appName   string
 	purpose   string
 	activeKid string
 	ciphers   map[string]*XChaCha20Poly1305Cipher // by kid, derived for this purpose
 }
 
-// NewKeyringCipher validates the whole conf and derives this purpose's cipher
-// per key — all misconfiguration is a construction (= boot) failure, never a
-// per-request surprise: active missing or not among keys, empty or dotted key
-// ids, unknown algs, malformed keys.
-func NewKeyringCipher(conf *KeyringConf, purpose string) (*KeyringCipher, error) {
+// NewKeyringCipher validates the whole conf and derives this app and purpose's
+// cipher per key — all misconfiguration is a construction (= boot) failure,
+// never a per-request surprise: active missing or not among keys, empty or
+// dotted key ids, unknown algs, malformed keys.
+//
+// appName is taken, not composed by the caller, because the label it forms must
+// be identical in every instance of one app and different between apps; a value
+// typed per deployment would derive keys that cannot read each other.
+func NewKeyringCipher(conf *KeyringConf, appName, purpose string) (*KeyringCipher, error) {
+	if appName == "" {
+		return nil, errors.New("keyring cipher: app name must not be empty")
+	}
 	if purpose == "" {
 		return nil, errors.New("keyring cipher: purpose must not be empty")
+	}
+	if strings.Contains(appName, ":") || strings.Contains(purpose, ":") {
+		return nil, fmt.Errorf("keyring cipher (%s:%s): app name and purpose must not contain ':' (the info label separator)", appName, purpose)
 	}
 	if conf == nil {
 		return nil, fmt.Errorf("keyring cipher (%s): no keyring conf", purpose)
@@ -92,7 +109,7 @@ func NewKeyringCipher(conf *KeyringConf, purpose string) (*KeyringCipher, error)
 			return nil, fmt.Errorf("keyring cipher (%s): key %q must be %d bytes, got %d",
 				purpose, kid, chacha20poly1305.KeySize, len(master))
 		}
-		derived, err := hkdf.Key(sha256.New, master, nil, "gwf-at-rest:"+purpose, chacha20poly1305.KeySize)
+		derived, err := hkdf.Key(sha256.New, master, nil, appName+":"+purpose, chacha20poly1305.KeySize)
 		if err != nil {
 			return nil, fmt.Errorf("keyring cipher (%s): key %q derivation: %v", purpose, kid, err)
 		}
@@ -104,6 +121,7 @@ func NewKeyringCipher(conf *KeyringConf, purpose string) (*KeyringCipher, error)
 	}
 
 	return &KeyringCipher{
+		appName:   appName,
 		purpose:   purpose,
 		activeKid: conf.Active,
 		ciphers:   ciphers,

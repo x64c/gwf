@@ -86,7 +86,7 @@ func (c *Core) PrepareCookieSessions(useFWUpstream bool) (*cookie.SessionManager
 		if err := sessionConf.UserSession.Validate(); err != nil {
 			return nil, err
 		}
-		cipher, err := security.NewKeyringCipher(sessionConf.Keyring, cookie.UserCookieCipherPurpose)
+		cipher, err := security.NewKeyringCipher(sessionConf.Keyring, c.appName, cookie.UserCookieCipherPurpose)
 		if err != nil {
 			return nil, fmt.Errorf("user cookie cipher: %v", err)
 		}
@@ -96,7 +96,7 @@ func (c *Core) PrepareCookieSessions(useFWUpstream bool) (*cookie.SessionManager
 		if err := sessionConf.AnonymousSession.Validate(); err != nil {
 			return nil, err
 		}
-		cipher, err := security.NewKeyringCipher(sessionConf.Keyring, cookie.AnonymousCookieCipherPurpose)
+		cipher, err := security.NewKeyringCipher(sessionConf.Keyring, c.appName, cookie.AnonymousCookieCipherPurpose)
 		if err != nil {
 			return nil, fmt.Errorf("anonymous cookie cipher: %v", err)
 		}

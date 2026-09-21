@@ -81,7 +81,7 @@ func (c *Core) PrepareFWUpstream(fwClients map[string]func(*fwupstream.Client)) 
 	// algs, key material) — misconfiguration is a boot failure here, never a
 	// per-request surprise.
 	if conf.TokenCipher != nil {
-		cipher, err := security.NewKeyringCipher(conf.TokenCipher, fwupstream.TokenCipherPurpose)
+		cipher, err := security.NewKeyringCipher(conf.TokenCipher, c.appName, fwupstream.TokenCipherPurpose)
 		if err != nil {
 			return fmt.Errorf("upstream token cipher: %v", err)
 		}

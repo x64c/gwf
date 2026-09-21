@@ -50,9 +50,9 @@ func NewSessionManager(appName string, kvdb kvdbs.DB, lockingManager locking.Man
 
 // UserCookieCipherContext / AnonymousCookieCipherContext are the cipher
 // contexts cookie values are bound to: cookie name + app. Cookie names are
-// package constants shared by every gwf app, so App is what keeps two apps'
-// cookies from decrypting each other's. Every seal/open of a cookie value
-// goes through these — never a hand-built context.
+// package constants shared by every app that uses this package, so App is
+// what keeps two apps' cookies from decrypting each other's. Every seal/open
+// of a cookie value goes through these — never a hand-built context.
 func (m *SessionManager) UserCookieCipherContext() security.CipherContext {
 	return security.CipherContext{App: m.appName, Location: UserCookieName}
 }

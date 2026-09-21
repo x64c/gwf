@@ -20,7 +20,7 @@ func (c *Core) PrepareAuthnFlowManager() (*authn.FlowManager, error) {
 	if keyring == nil {
 		return nil, errors.New("authn flow: no \"keyring\" in .web-cookie-session.json")
 	}
-	cipher, err := security.NewKeyringCipher(keyring, authn.FlowCipherPurpose)
+	cipher, err := security.NewKeyringCipher(keyring, c.appName, authn.FlowCipherPurpose)
 	if err != nil {
 		return nil, fmt.Errorf("authn flow cipher: %v", err)
 	}
