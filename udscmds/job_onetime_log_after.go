@@ -46,6 +46,7 @@ func (h *JobOnetimeLogAfter) HandleCommand(args []string, w io.Writer) error {
 	jobID := "log-msg-once"
 	job := &jobsched.OneTimeJob{
 		ID:       jobID,
+		Scope:    jobsched.OncePerInstance,
 		ExecTime: time.Now().Add(time.Duration(delayInMinutes) * time.Minute),
 		Task: func() error {
 			log.Printf("[JOB] message: %s", msg)

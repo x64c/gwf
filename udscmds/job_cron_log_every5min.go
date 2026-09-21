@@ -37,7 +37,7 @@ func (h *JobCronLogEvery5Min) HandleCommand(args []string, w io.Writer) error {
 	}
 	msg := strings.Join(args, " ")
 	jobID := "log-msg-every-5min"
-	cronjob := jobsched.NewEveryMinEmptyCronJob(jobID)
+	cronjob := jobsched.NewEveryMinEmptyCronJob(jobID, jobsched.OncePerInstance)
 	cronjob.Minutes = jobsched.BitsFromMinutes([]int{0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55})
 	cronjob.Task = func() error {
 		log.Printf("[CRON] message: %s", msg)
