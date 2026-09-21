@@ -4,6 +4,7 @@ import "time"
 
 type CronJob struct {
 	ID          string
+	Scope       Scope
 	Minutes     uint64 // 60 bits
 	Hours       uint32 // 24 bits
 	DaysOfMonth uint32 // 31 bits
@@ -14,11 +15,13 @@ type CronJob struct {
 	OnFinished func(error)
 }
 
-// NewEveryMinEmptyCronJob provides a cronjob matching every minute without a task as a template
+// NewEveryMinEmptyCronJob provides a cronjob with the given id and scope,
+// matching every minute and carrying no task, as a template.
 // Assign a Task, and Modify its time condition
-func NewEveryMinEmptyCronJob(jobID string) *CronJob {
+func NewEveryMinEmptyCronJob(jobID string, scope Scope) *CronJob {
 	return &CronJob{
 		ID:          jobID,
+		Scope:       scope,
 		Minutes:     AllMinutes,
 		Hours:       AllHours,
 		DaysOfMonth: AllDaysOfMonth,

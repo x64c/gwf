@@ -8,20 +8,27 @@ import (
 	"sync"
 	"time"
 
+	"github.com/x64c/gwf/gw/coord"
 	"github.com/x64c/gwf/gw/svc"
 )
 
 type Service struct {
-	name        string             // registered instance identity; see NewServiceAs
-	ctx         context.Context    // per-cycle runtime context (set in Start)
-	cancel      context.CancelFunc // per-cycle cancel (set in Start)
-	state       svc.AtomicState    // internal service state (State() may be read concurrently with lifecycle writes)
-	terminated  chan error         // one-shot; fires when Terminate completes
-	stopped     chan struct{}      // per-cycle; closed when run goroutine has stopped
-	oneTimeJobs map[int64][]*OneTimeJob
-	cronJobs    map[string]*CronJob
-	mu          sync.Mutex
-	wg          sync.WaitGroup
+	name                                 string             // registered instance identity; see NewServiceAs
+	coordMode                            coord.Mode         // the app's own coordination mode; a job's scope is read against it
+	ctx                                  context.Context    // per-cycle runtime context (set in Start)
+	cancel                               context.CancelFunc // per-cycle cancel (set in Start)
+	state                                svc.AtomicState    // internal service state (State() may be read concurrently with lifecycle writes)
+	terminated                           chan error         // one-shot; fires when Terminate completes
+	stopped                              chan struct{}      // per-cycle; closed when run goroutine has stopped
+	oneTimeJobsPerInstance               map[int64][]*OneTimeJob
+	cronJobsPerInstance                  map[string]*CronJob
+	oneTimeJobsPerApp                    map[int64][]*OneTimeJob
+	cronJobsPerApp                       map[string]*CronJob
+	ledgerForJobsPerAppCrossProcProvider LedgerForJobsPerAppCrossProcProvider // asked once, on the first OncePerApp job
+	ledger                               LedgerForJobsPerAppCrossProc         // what it yielded; nil until then, and forever if no such job is registered
+	ledgerMu                             sync.Mutex                           // guards the resolution above; never held with mu
+	mu                                   sync.Mutex
+	wg                                   sync.WaitGroup
 
 	// callbacks is boot wiring behind SetCallbacks: the fields are plain funcs
 	// read from job goroutines, so a write after Start would be a data race —
@@ -61,23 +68,37 @@ func (s *Service) State() svc.State {
 	return s.state.Load()
 }
 
-func NewService() *Service {
-	return NewServiceAs("JobSchedulerService")
+// NewService builds the scheduler for an app coordinating as coordMode.
+// perAppJobLedgerProvider is where the ledger for its OncePerApp jobs comes
+// from, and it is asked only if such a job is ever registered.
+func NewService(coordMode coord.Mode, perAppJobLedgerProvider LedgerForJobsPerAppCrossProcProvider) (*Service, error) {
+	return NewServiceAs("JobSchedulerService", coordMode, perAppJobLedgerProvider)
 }
 
 // NewServiceAs is NewService with the name given explicitly. A name identifies
 // a registered INSTANCE, not a type: it is what logs, status output and
 // dependency declarations all refer to, and registration rejects a duplicate.
 // The string is taken raw — uniqueness and legibility are the caller's.
-func NewServiceAs(name string) *Service {
+//
+// coordMode is the app's own coordination mode, and a scheduler that does not
+// know it cannot say what a job's Scope means. An undeclared mode is refused
+// here, once, rather than at every job.
+func NewServiceAs(name string, coordMode coord.Mode, perAppJobLedgerProvider LedgerForJobsPerAppCrossProcProvider) (*Service, error) {
+	if coordMode != coord.InProc && coordMode != coord.CrossProc {
+		return nil, fmt.Errorf("jobsched %q: coordination mode %v — a mode is a choice, never a default", name, coordMode)
+	}
 	s := &Service{
-		name:        name,
-		terminated:  make(chan error, 1),
-		oneTimeJobs: make(map[int64][]*OneTimeJob),
-		cronJobs:    make(map[string]*CronJob),
+		name:                                 name,
+		coordMode:                            coordMode,
+		terminated:                           make(chan error, 1),
+		oneTimeJobsPerInstance:               make(map[int64][]*OneTimeJob),
+		cronJobsPerInstance:                  make(map[string]*CronJob),
+		oneTimeJobsPerApp:                    make(map[int64][]*OneTimeJob),
+		cronJobsPerApp:                       make(map[string]*CronJob),
+		ledgerForJobsPerAppCrossProcProvider: perAppJobLedgerProvider,
 	}
 	s.state.Store(svc.StateREADY)
-	return s
+	return s, nil
 }
 
 // UseDefaultLoggers installs default logging callbacks — SetCallbacks with a
@@ -203,8 +224,10 @@ func (s *Service) run() {
 						log.Printf("[PANIC][%s] recovered: %v\n%s", s.Name(), r, debug.Stack())
 					}
 				}()
-				s.runOneTimeJobs(now)
-				s.runCronJobs(now)
+				s.runOneTimeJobsPerInstance(now)
+				s.runCronJobsPerInstance(now)
+				s.runOneTimeJobsPerApp(now)
+				s.runCronJobsPerApp(now)
 			}()
 		}
 	}
@@ -223,14 +246,14 @@ func (s *Service) GetOneTimeJobs() map[int64][]*OneTimeJob {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	result := make(map[int64][]*OneTimeJob, len(s.oneTimeJobs))
-	for key, jobs := range s.oneTimeJobs {
-		copies := make([]*OneTimeJob, len(jobs))
-		for i, job := range jobs {
-			j := *job
-			copies[i] = &j
+	result := make(map[int64][]*OneTimeJob, len(s.oneTimeJobsPerInstance)+len(s.oneTimeJobsPerApp))
+	for _, box := range []map[int64][]*OneTimeJob{s.oneTimeJobsPerInstance, s.oneTimeJobsPerApp} {
+		for key, jobs := range box {
+			for _, job := range jobs {
+				j := *job
+				result[key] = append(result[key], &j)
+			}
 		}
-		result[key] = copies
 	}
 	return result
 }
@@ -242,10 +265,12 @@ func (s *Service) GetCronJobs() map[string]*CronJob {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	result := make(map[string]*CronJob, len(s.cronJobs))
-	for id, job := range s.cronJobs {
-		j := *job
-		result[id] = &j
+	result := make(map[string]*CronJob, len(s.cronJobsPerInstance)+len(s.cronJobsPerApp))
+	for _, box := range []map[string]*CronJob{s.cronJobsPerInstance, s.cronJobsPerApp} {
+		for id, job := range box {
+			j := *job
+			result[id] = &j
+		}
 	}
 	return result
 }
@@ -276,7 +301,64 @@ func (s *Service) runCallback(jobKind, jobID, callback string, f func()) {
 	f()
 }
 
+// resolveLedgerForJobsPerAppCrossProc resolves the ledger on first need and
+// keeps it. The provider is asked once per successful answer, never for a
+// per-instance job, and a failure is returned rather than remembered.
+func (s *Service) resolveLedgerForJobsPerAppCrossProc() (LedgerForJobsPerAppCrossProc, error) {
+	s.ledgerMu.Lock()
+	defer s.ledgerMu.Unlock()
+	if s.ledger != nil {
+		return s.ledger, nil
+	}
+	if s.ledgerForJobsPerAppCrossProcProvider == nil {
+		return nil, fmt.Errorf("jobsched %q: no ledger provider", s.Name())
+	}
+	ledger, err := s.ledgerForJobsPerAppCrossProcProvider()
+	if err != nil {
+		return nil, err
+	}
+	if ledger == nil {
+		return nil, fmt.Errorf("jobsched %q: the ledger provider yielded none", s.Name())
+	}
+	s.ledger = ledger
+	return ledger, nil
+}
+
+// addOneTimeJobPerAppInCrossProcMode takes the one-time jobs AddOneTimeJob
+// cannot: one instance must be chosen for the job's planned minute, which is
+// what the ledger decides.
+func (s *Service) addOneTimeJobPerAppInCrossProcMode(job *OneTimeJob) error {
+	if _, err := s.resolveLedgerForJobsPerAppCrossProc(); err != nil {
+		return fmt.Errorf("jobsched %q: one-time job %q: %w", s.Name(), job.ID, err)
+	}
+	if err := s.storeOneTimeJob(job, s.oneTimeJobsPerApp); err != nil {
+		return err
+	}
+	s.notifyOneTimeJobAdded(job)
+	return nil
+}
+
 func (s *Service) AddOneTimeJob(job *OneTimeJob) error {
+	if s.coordMode == coord.CrossProc && job.Scope == OncePerApp {
+		return s.addOneTimeJobPerAppInCrossProcMode(job)
+	}
+	// s.coordMode == coord.InProc || job.Scope == OncePerInstance:
+	// under InProc, OncePerApp collapses into PerInstance — one process is the
+	// whole app, so its one firing is this instance's.
+	return s.addOneTimeJobPerInstance(job)
+}
+
+func (s *Service) addOneTimeJobPerInstance(job *OneTimeJob) error {
+	if err := s.storeOneTimeJob(job, s.oneTimeJobsPerInstance); err != nil {
+		return err
+	}
+	s.notifyOneTimeJobAdded(job)
+	return nil
+}
+
+// storeOneTimeJob checks the job's timing and files it in into, under the
+// minute it will fire in — the same arithmetic the tick uses to look it up.
+func (s *Service) storeOneTimeJob(job *OneTimeJob, into map[int64][]*OneTimeJob) error {
 	now := time.Now()
 	margin := 30 * time.Second
 	if job.ExecTime.Before(now.Add(margin)) {
@@ -292,11 +374,17 @@ func (s *Service) AddOneTimeJob(job *OneTimeJob) error {
 	}
 	key := regTime.Unix() / 60
 	s.mu.Lock()
-	if s.oneTimeJobs == nil {
-		s.oneTimeJobs = make(map[int64][]*OneTimeJob) // safety net
+	defer s.mu.Unlock()
+	if into == nil {
+		return fmt.Errorf("jobsched %q: one-time job %q: scheduler not built by NewService", s.Name(), job.ID)
 	}
-	s.oneTimeJobs[key] = append(s.oneTimeJobs[key], job) // to make this safer?
-	s.mu.Unlock()
+	into[key] = append(into[key], job)
+	return nil
+}
+
+// notifyOneTimeJobAdded fires the added-callbacks outside the lock, job-specific
+// one first. A panicking job callback fails the callback, not the process.
+func (s *Service) notifyOneTimeJobAdded(job *OneTimeJob) {
 	if job.OnAdded != nil { // Job-specific callback
 		func() {
 			defer func() {
@@ -310,19 +398,62 @@ func (s *Service) AddOneTimeJob(job *OneTimeJob) error {
 	if s.callbacks.OnOneTimeJobAdded != nil { // Service-level default callback
 		s.callbacks.OnOneTimeJobAdded(job)
 	}
+}
+
+// addCronJobPerAppInCrossProcMode takes the cron jobs AddCronJob cannot: one
+// instance must be chosen for each planned minute, which is what the ledger
+// decides.
+func (s *Service) addCronJobPerAppInCrossProcMode(job *CronJob) error {
+	if _, err := s.resolveLedgerForJobsPerAppCrossProc(); err != nil {
+		return fmt.Errorf("jobsched %q: cron job %q: %w", s.Name(), job.ID, err)
+	}
+	if err := s.storeCronJob(job, s.cronJobsPerApp); err != nil {
+		return err
+	}
+	s.notifyCronJobAdded(job)
 	return nil
 }
 
 func (s *Service) AddCronJob(job *CronJob) error {
-	s.mu.Lock()
-	if s.cronJobs == nil {
-		s.cronJobs = make(map[string]*CronJob)
+	if s.coordMode == coord.CrossProc && job.Scope == OncePerApp {
+		return s.addCronJobPerAppInCrossProcMode(job)
 	}
-	if _, exists := s.cronJobs[job.ID]; exists {
+	// s.coordMode == coord.InProc || job.Scope == OncePerInstance:
+	// under InProc, OncePerApp collapses into PerInstance — one process is the
+	// whole app, so its one firing is this instance's.
+	return s.addCronJobPerInstance(job)
+}
+
+func (s *Service) addCronJobPerInstance(job *CronJob) error {
+	if err := s.storeCronJob(job, s.cronJobsPerInstance); err != nil {
+		return err
+	}
+	s.notifyCronJobAdded(job)
+	return nil
+}
+
+// storeCronJob files the job in into. An id must be unique across BOTH boxes:
+// DeleteCronJob and GetCronJobs span them, so two jobs sharing an id would make
+// either of those ambiguous.
+func (s *Service) storeCronJob(job *CronJob, into map[string]*CronJob) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if into == nil {
+		return fmt.Errorf("jobsched %q: cron job %q: scheduler not built by NewService", s.Name(), job.ID)
+	}
+	if _, exists := s.cronJobsPerInstance[job.ID]; exists {
 		return fmt.Errorf("cron job with ID %q already exists", job.ID)
 	}
-	s.cronJobs[job.ID] = job
-	s.mu.Unlock()
+	if _, exists := s.cronJobsPerApp[job.ID]; exists {
+		return fmt.Errorf("cron job with ID %q already exists", job.ID)
+	}
+	into[job.ID] = job
+	return nil
+}
+
+// notifyCronJobAdded fires the added-callbacks outside the lock, job-specific
+// one first. A panicking job callback fails the callback, not the process.
+func (s *Service) notifyCronJobAdded(job *CronJob) {
 	// Job-specific callback
 	if job.OnAdded != nil {
 		func() {
@@ -338,28 +469,29 @@ func (s *Service) AddCronJob(job *CronJob) error {
 	if s.callbacks.OnCronJobAdded != nil {
 		s.callbacks.OnCronJobAdded(job)
 	}
-	return nil
 }
 
 // DeleteOneTimeJob - Delete a job
 func (s *Service) DeleteOneTimeJob(jobID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for key, jobs := range s.oneTimeJobs {
-		filtered := jobs[:0]
-		for _, job := range jobs {
-			if job.ID == jobID {
-				if s.callbacks.OnOneTimeJobDeleted != nil {
-					s.callbacks.OnOneTimeJobDeleted(job)
+	for _, box := range []map[int64][]*OneTimeJob{s.oneTimeJobsPerInstance, s.oneTimeJobsPerApp} {
+		for key, jobs := range box {
+			filtered := jobs[:0]
+			for _, job := range jobs {
+				if job.ID == jobID {
+					if s.callbacks.OnOneTimeJobDeleted != nil {
+						s.callbacks.OnOneTimeJobDeleted(job)
+					}
+				} else {
+					filtered = append(filtered, job)
 				}
-			} else {
-				filtered = append(filtered, job)
 			}
-		}
-		if len(filtered) == 0 {
-			delete(s.oneTimeJobs, key)
-		} else {
-			s.oneTimeJobs[key] = filtered
+			if len(filtered) == 0 {
+				delete(box, key)
+			} else {
+				box[key] = filtered
+			}
 		}
 	}
 }
@@ -367,27 +499,111 @@ func (s *Service) DeleteOneTimeJob(jobID string) {
 // DeleteCronJob removes a cron job by its ID
 func (s *Service) DeleteCronJob(jobID string) {
 	s.mu.Lock()
-	job, exists := s.cronJobs[jobID]
+	job, exists := s.cronJobsPerInstance[jobID]
+	if exists {
+		delete(s.cronJobsPerInstance, jobID)
+	} else if job, exists = s.cronJobsPerApp[jobID]; exists {
+		delete(s.cronJobsPerApp, jobID)
+	}
+	s.mu.Unlock()
 	if !exists {
-		s.mu.Unlock()
 		return
 	}
-	delete(s.cronJobs, jobID)
-	s.mu.Unlock()
 	// trigger global delete callback outside lock
 	if s.callbacks.OnCronJobDeleted != nil {
 		s.callbacks.OnCronJobDeleted(job)
 	}
 }
 
-func (s *Service) runOneTimeJobs(now time.Time) {
+func (s *Service) runOneTimeJobsPerInstance(now time.Time) {
 	key := now.Unix() / 60
 	s.mu.Lock()
-	jobs := s.oneTimeJobs[key]
-	delete(s.oneTimeJobs, key)
+	jobs := s.oneTimeJobsPerInstance[key]
+	delete(s.oneTimeJobsPerInstance, key)
 	s.mu.Unlock()
 	for _, job := range jobs {
 		s.runOneTimeJob(job)
+	}
+}
+
+// resolvedLedgerForJobsPerAppCrossProc returns the ledger if it has already
+// been resolved, without asking the provider: the tick must not do boot wiring.
+// A per-app job is only ever stored after a successful resolution, so a nil
+// here with jobs present is a bug, not a configuration.
+func (s *Service) resolvedLedgerForJobsPerAppCrossProc() LedgerForJobsPerAppCrossProc {
+	s.ledgerMu.Lock()
+	defer s.ledgerMu.Unlock()
+	return s.ledger
+}
+
+// runOneTimeJobsPerApp takes this minute's per-app one-time jobs and runs the
+// ones this instance claims. The local take happens first, exactly as in the
+// per-instance walk, so a job is never attempted twice here; the other
+// instances hold their own copies and contend for the same mark.
+//
+// A claim error is not a verdict, so the job is not run — and since every
+// instance drops its copy on its own take, the occurrence may pass unfired.
+// That is the fail-closed direction: a duplicate run cannot be undone.
+func (s *Service) runOneTimeJobsPerApp(now time.Time) {
+	plannedMinute := now.Unix() / 60
+	s.mu.Lock()
+	jobs := s.oneTimeJobsPerApp[plannedMinute]
+	delete(s.oneTimeJobsPerApp, plannedMinute)
+	s.mu.Unlock()
+	if len(jobs) == 0 {
+		return
+	}
+	ledger := s.resolvedLedgerForJobsPerAppCrossProc()
+	if ledger == nil {
+		log.Printf("[ERROR][%s] %d per-app one-time job(s) due with no ledger — not run", s.Name(), len(jobs))
+		return
+	}
+	for _, job := range jobs {
+		won, err := ledger.Claim(s.ctx, job.ID, plannedMinute)
+		if err != nil {
+			log.Printf("[ERROR][%s] one-time job %q: claim failed, not run: %v", s.Name(), job.ID, err)
+			continue
+		}
+		if !won {
+			continue // another instance has this minute
+		}
+		s.runOneTimeJob(job)
+	}
+}
+
+// runCronJobsPerApp runs the per-app cron jobs whose schedule matches this
+// minute, each only if this instance claims that minute. Losing is a normal
+// outcome and is silent; the job stays registered and contends again at its
+// next occurrence.
+func (s *Service) runCronJobsPerApp(now time.Time) {
+	s.mu.Lock()
+	jobs := make([]*CronJob, 0, len(s.cronJobsPerApp))
+	for _, job := range s.cronJobsPerApp {
+		jobs = append(jobs, job)
+	}
+	s.mu.Unlock()
+	if len(jobs) == 0 {
+		return
+	}
+	ledger := s.resolvedLedgerForJobsPerAppCrossProc()
+	if ledger == nil {
+		log.Printf("[ERROR][%s] %d per-app cron job(s) with no ledger — none run", s.Name(), len(jobs))
+		return
+	}
+	plannedMinute := now.Unix() / 60
+	for _, job := range jobs {
+		if !job.Matches(now) {
+			continue
+		}
+		won, err := ledger.Claim(s.ctx, job.ID, plannedMinute)
+		if err != nil {
+			log.Printf("[ERROR][%s] cron job %q: claim failed, occurrence skipped: %v", s.Name(), job.ID, err)
+			continue
+		}
+		if !won {
+			continue // another instance has this minute
+		}
+		s.runCronJob(job)
 	}
 }
 
@@ -403,11 +619,11 @@ func (s *Service) runOneTimeJob(job *OneTimeJob) {
 	})
 }
 
-func (s *Service) runCronJobs(now time.Time) {
+func (s *Service) runCronJobsPerInstance(now time.Time) {
 	s.mu.Lock()
 	// Copy values to a slice so we can unlock early
-	jobs := make([]*CronJob, 0, len(s.cronJobs))
-	for _, job := range s.cronJobs {
+	jobs := make([]*CronJob, 0, len(s.cronJobsPerInstance))
+	for _, job := range s.cronJobsPerInstance {
 		jobs = append(jobs, job)
 	}
 	s.mu.Unlock()
