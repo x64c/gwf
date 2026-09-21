@@ -338,7 +338,13 @@ func (s *Service) addOneTimeJobPerAppInCrossProcMode(job *OneTimeJob) error {
 	return nil
 }
 
+// AddOneTimeJob registers job, refusing one whose Scope is undeclared: how many
+// times the work happens is the job's own answer, and a guess here would either
+// repeat it in every instance or confine it to one.
 func (s *Service) AddOneTimeJob(job *OneTimeJob) error {
+	if job.Scope.undeclared() {
+		return fmt.Errorf("jobsched %q: one-time job %q: scope %v: declare OncePerInstance or OncePerApp", s.Name(), job.ID, job.Scope)
+	}
 	if s.coordMode == coord.CrossProc && job.Scope == OncePerApp {
 		return s.addOneTimeJobPerAppInCrossProcMode(job)
 	}
@@ -414,7 +420,13 @@ func (s *Service) addCronJobPerAppInCrossProcMode(job *CronJob) error {
 	return nil
 }
 
+// AddCronJob registers job, refusing one whose Scope is undeclared: how many
+// times the work happens is the job's own answer, and a guess here would either
+// repeat it in every instance or confine it to one.
 func (s *Service) AddCronJob(job *CronJob) error {
+	if job.Scope.undeclared() {
+		return fmt.Errorf("jobsched %q: cron job %q: scope %v: declare OncePerInstance or OncePerApp", s.Name(), job.ID, job.Scope)
+	}
 	if s.coordMode == coord.CrossProc && job.Scope == OncePerApp {
 		return s.addCronJobPerAppInCrossProcMode(job)
 	}

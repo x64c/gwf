@@ -31,6 +31,11 @@ const (
 	OncePerApp
 )
 
+// undeclared reports whether s is the zero value — the job never answered.
+func (s Scope) undeclared() bool {
+	return s == 0
+}
+
 func (s Scope) String() string {
 	switch s {
 	case OncePerInstance:

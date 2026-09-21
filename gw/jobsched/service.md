@@ -30,6 +30,9 @@ After `Prepare`:
 - The app registers jobs via `AddOneTimeJob` / `AddCronJob` — these do
   **not** check service state, so jobs can be added at any point (before
   Start, between Stop and Start, or while running).
+- They do check the job's `Scope`, and refuse one left at its zero value:
+  how many times the work happens is the job's own answer, so a job that
+  never gave it is not registered.
 
 ## Start()
 
