@@ -9,9 +9,7 @@ import (
 	"log"
 	"net"
 	"os"
-	"os/user"
 	"runtime/debug"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -244,34 +242,6 @@ func (s *Service) transitionAfterRun() {
 	if s.state.Load() == svc.StateSTOPPING {
 		s.state.Store(svc.StateREADY)
 	}
-}
-
-// peerCreds is the connecting process's kernel-reported identity — uid
-// (resolved to a username when the system knows one), gid, pid — via
-// SO_PEERCRED. This is attribution for the audit log, read from the kernel
-// and unfakeable by the client; it is NOT authorization, so an unreadable
-// credential degrades to "peer=?" rather than refusing the connection.
-func peerCreds(c net.Conn) string {
-	uc, ok := c.(*net.UnixConn)
-	if !ok {
-		return "peer=?"
-	}
-	raw, err := uc.SyscallConn()
-	if err != nil {
-		return "peer=?"
-	}
-	var cred *syscall.Ucred
-	var credErr error
-	if err = raw.Control(func(fd uintptr) {
-		cred, credErr = syscall.GetsockoptUcred(int(fd), syscall.SOL_SOCKET, syscall.SO_PEERCRED)
-	}); err != nil || credErr != nil {
-		return "peer=?"
-	}
-	who := strconv.Itoa(int(cred.Uid))
-	if u, lookErr := user.LookupId(who); lookErr == nil {
-		who += "(" + u.Username + ")"
-	}
-	return fmt.Sprintf("uid=%s gid=%d pid=%d", who, cred.Gid, cred.Pid)
 }
 
 func (s *Service) handleConn(c net.Conn) {
