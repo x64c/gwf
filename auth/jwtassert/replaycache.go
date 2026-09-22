@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/x64c/gwf/gw/coord"
-	"github.com/x64c/gwf/gw/framework"
+	"github.com/x64c/gwf/gw/kvdbs"
 )
 
 // ReplayCache remembers assertion ids until they expire, so a captured
@@ -22,34 +22,29 @@ type ReplayCache interface {
 }
 
 // NewReplayCache builds the cache the app's coordination mode calls for, so
-// how far the cache reaches is the deployment's own statement rather than a
-// choice made at the call site:
+// how far the cache reaches is the deployment's own statement:
 //
-//	InProc    → ReplayCacheInMemMap, this process's memory
-//	CrossProc → ReplayCacheKVDB over the app's MainKVDB, keys under
-//	            "<app name>:ar:"; MainKVDB must be set before this call
+//	InProc    → ReplayCacheInMemMap, this process's memory; kvdb is not used
+//	CrossProc → ReplayCacheKVDB over kvdb, keys under "<appName>:ar:"
 //
-// The region carries the app's name because the name and the mode together
-// are what make two processes one app: instances running under CrossProc with
-// the same name against the same store share one cache, and no other app's
-// ids are in it.
-func NewReplayCache(app framework.Application) (ReplayCache, error) {
-	if app == nil {
-		return nil, errors.New("jwtassert.NewReplayCache: app required")
+// Pass the app's own values: its AppName(), CoordMode() and MainKVDB. The
+// region carries the app's name because the name and the mode together are
+// what make two processes one app: instances running under CrossProc with the
+// same name against the same store share one cache, and no other app's ids are
+// in it. The region is built here, never by the caller.
+func NewReplayCache(appName string, coordMode coord.Mode, kvdb kvdbs.DB) (ReplayCache, error) {
+	if appName == "" {
+		return nil, errors.New("jwtassert.NewReplayCache: appName required")
 	}
-	core := app.AppCore()
-	if core == nil {
-		return nil, errors.New("jwtassert.NewReplayCache: app has no core")
-	}
-	switch core.CoordMode() {
+	switch coordMode {
 	case coord.InProc:
 		return NewReplayCacheInMemMap(), nil
 	case coord.CrossProc:
-		if core.MainKVDB == nil {
-			return nil, errors.New("jwtassert.NewReplayCache: main kvdb not ready — under CrossProc the replay cache lives in it")
+		if kvdb == nil {
+			return nil, errors.New("jwtassert.NewReplayCache: kvdb required — under CrossProc the replay cache lives in it")
 		}
-		return NewReplayCacheKVDB(core.MainKVDB, core.AppName()+":ar:")
+		return NewReplayCacheKVDB(kvdb, appName+":ar:")
 	default:
-		return nil, fmt.Errorf("jwtassert.NewReplayCache: unknown coordination mode %v", core.CoordMode())
+		return nil, fmt.Errorf("jwtassert.NewReplayCache: unknown coordination mode %v", coordMode)
 	}
 }
