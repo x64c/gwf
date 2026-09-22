@@ -4,11 +4,11 @@ go 1.27.1
 
 require (
 	github.com/golang-jwt/jwt/v5 v5.3.1
-	github.com/x64c/gwf/auth/jwtassert v0.16.1
+	github.com/x64c/gwf/auth/jwtassert v0.17.0
 )
 
 require (
-	github.com/x64c/gwf/gw v0.16.1 // indirect
+	github.com/x64c/gwf/gw v0.17.0 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 )
