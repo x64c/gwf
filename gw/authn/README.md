@@ -19,7 +19,7 @@ compositions the parts have been exercised in.
 | **Verified identity** | `authn.VerifiedIdentity`: an external identity, verified, not yet mapped to a local user. Every method produces one. |
 | **Session flavor** | What the app opens for a mapped user: a **cookie session** (`session/cookie`, browser) or a **bearer session** (`session/bearer`, token-carrying client). Either way the session is a row in the KVDB; the cookie or token only names it. |
 | **Gate** | A handler wrapper that admits a request by an existing session or client registration (`handlerwrappers.CookieUserSession`, `BearerClient`, `BearerSession`, `BearerUserSession`, …). |
-| **Delegated Code Exchange** | Split relying party: the browser-facing app initiates; an auth server exchanges the code and issues bearer tokens. |
+| **Delegated Code Exchange** | Split relying party: an initiating app runs the initiate half; an auth server exchanges the code and issues it bearer tokens. |
 | **Direct Code Exchange** | Whole relying party: the app exchanges the code with the IdP itself. |
 | **Machine Assertion** | A machine client authenticates each request by a self-signed, request-bound JWT. |
 | **User Token by Machine Assertion** | A machine client presents an assertion naming a user; the upstream answers with a bearer token for that user. |
@@ -34,15 +34,15 @@ compositions the parts have been exercised in.
 | `auth/oidc` | Relying-party halves for the OIDC authorization-code flow with PKCE. `Provider.AuthCodeURL` (initiate), `Provider.VerifyAuthCode` (verify). A `Provider` is described entirely by configuration; `WebLoginConfs` (`LoadWebLoginConfs`) holds an app's browser logins keyed by identity provider id — `{"<idp id>": {"provider": {…}, "redirect_uri": "…"}}`. |
 | `auth/fwauthserver` | Verify half delegated to an auth server: `Verifier.VerifyAuthCode` forwards the code and flow secrets, validates the auth server's ID token against its JWKS. |
 | `auth/jwtassert` | Machine authentication: `Signer` (client half), `Verifier` (receiving half), `Gate` (handler wrapper). `SignerConfs` (`LoadSignerConfs`, `NewSigner`) holds a downstream's signers keyed by fwupstream client id — `{"<client id>": {"kid": …, "private_key_path": …, "audience": …, "max_age": …}}`. |
-| `security` | Wire bodies between a downstream and an auth server: `AuthRequestBody`, `AuthResponseBody`, `RefreshAccessTokenRequestBody`. |
+| `security` | Wire bodies between an initiating app and an auth server: `AuthRequestBody`, `AuthResponseBody`, `RefreshAccessTokenRequestBody`. |
 | `session/cookie`, `session/bearer` | Session flavors; session rows live in the KVDB. Each row carries per-upstream token slots. |
 | `fwupstream` | Downstream side of an upstream relationship: client configuration, bearer-carrying request ladder, access-token refresh, upstream JWKS fetch. |
 | `handlerwrappers` | Gates by session flavor and by bearer client registration. |
 
 ## Flow ticket
 
-Every browser-mediated flow opens with `FlowManager.IssueTicket` and closes
-with `FlowManager.ConsumeTicket`.
+Every authorization-code flow a framework app initiates opens with
+`FlowManager.IssueTicket` and closes with `FlowManager.ConsumeTicket`.
 
 - Cookie `__Host-authn-flow`, `Secure`, `HttpOnly`, `SameSite=Lax`, max age
   600 s, sealed under a cipher context bound to the app name and the cookie
@@ -55,8 +55,11 @@ with `FlowManager.ConsumeTicket`.
 
 ## Delegated Code Exchange
 
-The initiate half runs in the browser-facing app; the verify half runs in an
-auth server. The browser-facing app never holds the IdP client secret.
+The initiate half runs in the initiating app; the verify half runs in an
+auth server. The initiating app never holds the IdP client secret. The
+auth server's side is the same whatever the initiating app is.
+
+A framework app serving a browser:
 
 ```
 browser ── GET login endpoint ──────────▶ app          IssueTicket; redirect to Provider.AuthCodeURL
@@ -73,25 +76,39 @@ app                                                    fwauthserver.Verifier val
 browser ◀─ Set-Cookie; 302 ─────────────  app
 ```
 
+An app holding the token pair itself — a native app, for one (RFC 8252) —
+runs the initiate half in its own code: state, nonce, and PKCE verifier stay
+in the app, and the code returns on the app's own redirect:
+
+```
+app     ── authorization request ───────▶ IdP          state, nonce, S256 challenge
+app     ◀─ redirect?code&state ─────────  IdP          the app compares state
+app     ── POST verify endpoint ────────▶ auth server  Client-Id; AuthRequestBody, as above
+app     ◀─ 200 AuthResponseBody ────────  auth server
+```
+
 | Side | Parts |
 |---|---|
-| Browser-facing app | `authn.FlowManager` · `oidc.Provider` (initiate half; `ClientSecret` empty) · `oidc.AuthCodeRequestHandler` (login endpoint) · `fwauthserver.DelegatedExchangeCallbackHandler` (callback endpoint: ticket → `fwauthserver.Verifier` → `authn.UIDStrResolver` → cookie session + token pair → `cookie.FinishLogin`) · `cookie.SessionManager` |
-| Auth server | `oidc.DelegatedExchangeAuthCodeVerifyHandler` (verify endpoint: caller by `Client-Id` → its `oidc.Provider` → `authn.UIDStrResolver` → bearer session → ID token signed with the active JWKS key, `Core.SignIDToken`) · `oidc.Provider` (verify half; holds the client secret) · `bearer.SessionManager` (a session group per client kind; clients registered by name → opaque id) · `bearer.RefreshAccessTokenHandler` · JWKS |
+| Framework app serving a browser | `authn.FlowManager` · `oidc.Provider` (initiate half; `ClientSecret` empty) · `oidc.AuthCodeRequestHandler` (login endpoint) · `fwauthserver.DelegatedExchangeCallbackHandler` (callback endpoint: ticket → `fwauthserver.Verifier` → `authn.UIDStrResolver` → cookie session + token pair → `cookie.FinishLogin`) · `cookie.SessionManager` |
+| App holding the token pair itself | No framework part: the initiate half and the refresh ladder are its own code. |
+| Auth server | `oidc.DelegatedExchangeAuthCodeVerifyHandler` (verify endpoint: caller by `Client-Id` → its `oidc.Provider` → `authn.UIDStrResolver` → optional `Admit` (refusal with its own status) → optional `ExtendResponse` (fields added beside the tokens) → bearer session → ID token signed with the active JWKS key, `Core.SignIDToken`) · `oidc.Provider` (verify half; holds the client secret) · `bearer.SessionManager` (a session group per client kind; clients registered by name → opaque id) · `bearer.RefreshAccessTokenHandler` · JWKS |
 
-Configuration on the browser-facing side: `fwupstream.ClientConf` — `host`,
-`client_id` (the browser-facing app's id at the auth server), `verify_external_auth_code`
+Configuration on a framework app: `fwupstream.ClientConf` — `host`,
+`client_id` (the framework app's id at the auth server), `verify_external_auth_code`
 (verify endpoint path per IdP id), `refresh_access_token`, `jwks_url`.
 
-Session lifetime after login: the app calls the auth server as its user
-through `UserSessionData.UpstreamRequestWithBearerRetriable`; on 401 the
-ladder refreshes the pair at `refresh_access_token` (serialized per session
-row) and retries once. A refresh sideloader
+Session lifetime after login, in a framework app: the app calls the auth
+server as its user through `UserSessionData.UpstreamRequestWithBearerRetriable`;
+on 401 the ladder refreshes the pair at `refresh_access_token` (serialized per
+session row) and retries once. A refresh sideloader
 (`cookie.SetUserRefreshSideloader`) adds app-defined fields to the refresh
-body.
+body. An app holding the token pair itself runs the same ladder in its own
+code: on 401 it refreshes at the refresh endpoint and retries once. A refresh
+token is single-use: of two concurrent refreshes of one pair, one is refused.
 
-Failures at verify: `*fwauthserver.UpstreamError` (the auth server answered
-non-200; the body is carried whole), `errs.IDTokenInvalid`,
-`errs.IDPUnavailable`.
+Failures at verify, in a framework app: `*fwauthserver.UpstreamError` (the
+auth server answered non-200; the body is carried whole),
+`errs.IDTokenInvalid`, `errs.IDPUnavailable`.
 
 ## Direct Code Exchange
 
@@ -234,7 +251,8 @@ request context.
 | Identity established by | Session opened | Exercised in |
 |---|---|---|
 | `fwauthserver` (auth server verifies) | cookie session at the downstream; bearer session at the auth server | Delegated Code Exchange |
-| `oidc` (app verifies) | cookie session | Direct Code Exchange; the auth-server side of Delegated Code Exchange |
+| `oidc` (app verifies) | cookie session | Direct Code Exchange |
+| `oidc` (auth server verifies) | bearer session at the auth server | the auth server's side of Delegated Code Exchange; all of it when the initiating app holds the token pair itself |
 | `jwtassert` | none (per request) | Machine Assertion |
 | `jwtassert` + asserted user | bearer session at the upstream; token cached on the downstream's cookie session row | User Token by Machine Assertion |
 
