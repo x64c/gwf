@@ -1,10 +1,18 @@
 # Throttle Middleware
 
-`Throttle{AppProvider, BucketGroupID, KeyProvider}` limits requests by a
-caller-defined string key. Per request it reaches the limiter through its
-framework handle, extracts the key with `KeyProvider`, and asks
-`TryAdmit(ctx, BucketGroupID, key, now)`. On refusal it answers HTTP 429 with the
-structured `RateLimited` error and does not call the inner handler.
+Two throttles limit requests by a caller-defined string key within a bucket
+group — a rate — and differ only in how the group is chosen:
+
+- `ThrottleFixedGroup{AppProvider, BucketGroupID, KeyProvider}` counts every
+  request in one group, `BucketGroupID`.
+- `ThrottleDynamicGroup{AppProvider, BucketGroupProvider, KeyProvider}` picks the
+  group per request with `BucketGroupProvider`.
+
+Per request each reaches the limiter through its framework handle, extracts the
+key with `KeyProvider`, and asks `TryAdmit(ctx, group, key, now)`. On refusal it
+answers HTTP 429 with the structured `RateLimited` error and does not call the
+inner handler. At wrap time each group it may use must exist in the limiter, or
+the wrap fails naming it.
 
 The limiter is reached through its handle, so an un-admitted throttle service —
 stopped by an operator, mid-teardown, or never wired — answers HTTP 503
@@ -14,6 +22,20 @@ traffic. A limiter that is admitted but answers with an error gets the same 503
 counters live outside this process can do so. An endpoint carrying this
 middleware is reached through the throttling service strictly; there is no
 bypass state.
+
+## Bucket group providers
+
+A bucket group is a rate: its burst and refill come from the throttle
+configuration. `ThrottleDynamicGroup`'s `BucketGroupProvider` picks the group per
+request, so one route can count different callers at different rates — by the
+kind of client calling, say.
+
+- `BucketGroupIDs()` lists every group the provider may pick. The list is the
+  code's side; the configured groups are the deployment's side. At wrap time each
+  listed group must exist in the limiter, or the wrap fails naming it.
+- `BucketGroupID(r)` picks one of them from the request's own data, so every
+  process of the app picks the same group for the same request. `ok=false`
+  blocks the request with 429; a group the provider did not list answers 500.
 
 ## Key providers
 
