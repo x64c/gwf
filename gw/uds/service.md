@@ -113,6 +113,29 @@ Same flow as `Stop()` (cancel + waitStopped), plus:
 The `CommandStore` and the (now-removed) socket file are reclaimed at
 process exit — no UDS-specific cleanup beyond what `Stop` already does.
 
+## Commands that ask
+
+A connection is a session: `> ` waits for a command line. A running command
+that needs more asks through the `*Prompter` every handler receives —
+`Prompter.Ask(question)` writes `>> ` + the question and returns the
+operator's next line:
+
+```
+> foo-set bar
+
+>> New value: baz
+>> Confirm value: baz
+```
+
+- Answers are read through the session's own scanner, so input sent ahead is
+  kept, and capped at `max_line_bytes` like a command line; an over-cap answer
+  ends the session. The command line is logged; answers never are. Input is
+  visible as it is typed.
+- A handler that asks nothing ignores its Prompter.
+- Nothing times out: the session waits for an answer as it waits for a
+  command — until the operator answers or quits, or the service stops. Ask
+  before taking a lock or opening a transaction, not while holding one.
+
 ## Socket placement
 
 The framework sets no default path — `socket_path` is the deployment's

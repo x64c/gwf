@@ -263,8 +263,11 @@ func (s *Service) handleConn(c net.Conn) {
 	}()
 
 	// Per-line cap: an over-cap line is ErrTooLong below, answered and closed.
+	// Commands read their answers through the same scanner (the Prompter), so
+	// the cap holds for answers too.
 	scanner := bufio.NewScanner(c)
 	scanner.Buffer(nil, s.Conf.MaxLineBytes)
+	prompter := NewPrompter(scanner, c)
 
 	for {
 		_, _ = fmt.Fprint(c, "> ")
@@ -297,7 +300,7 @@ func (s *Service) handleConn(c net.Conn) {
 		if handler, ok := s.cmdStore.GetHandler(cmdStr); ok {
 			log.Printf("[INFO][%s] [%s] `%s`\n", s.Name(), peer, line)
 			_, _ = fmt.Fprintln(c)
-			panicked, err := s.runHandler(handler, args[1:], c, peer, line)
+			panicked, err := s.runHandler(handler, args[1:], prompter, c, peer, line)
 			if panicked {
 				// The connection dies with the answer below; the socket
 				// serves on. Without this recover, one panicking handler
@@ -312,6 +315,12 @@ func (s *Service) handleConn(c net.Conn) {
 				log.Printf("[INFO][%s] [%s] `%s` completed\n", s.Name(), peer, line)
 			}
 			_, _ = fmt.Fprintln(c)
+			if errors.Is(scanner.Err(), bufio.ErrTooLong) {
+				// An answer overran the cap: the command has said so; the
+				// scanner is spent, so the session ends here.
+				log.Printf("[ERROR][%s] client answer exceeded max_line_bytes (%d)", s.Name(), s.Conf.MaxLineBytes)
+				return
+			}
 		} else {
 			_, _ = fmt.Fprintf(c, "unknown command: %s\n\n", cmdStr)
 		}
@@ -321,7 +330,7 @@ func (s *Service) handleConn(c net.Conn) {
 
 // runHandler runs one command handler, converting a panic into an error and
 // reporting that it panicked. The stack is logged here, where it exists.
-func (s *Service) runHandler(h CommandHandler, args []string, c net.Conn, peer, line string) (panicked bool, err error) {
+func (s *Service) runHandler(h CommandHandler, args []string, p *Prompter, c net.Conn, peer, line string) (panicked bool, err error) {
 	defer func() {
 		if rcv := recover(); rcv != nil {
 			log.Printf("[PANIC][%s] [%s] `%s` handler panicked: %v\n%s", s.Name(), peer, line, rcv, debug.Stack())
@@ -329,5 +338,5 @@ func (s *Service) runHandler(h CommandHandler, args []string, c net.Conn, peer, 
 			err = fmt.Errorf("handler panicked: %v", rcv)
 		}
 	}()
-	return false, h.HandleCommand(args, c)
+	return false, h.HandleCommand(args, p, c)
 }

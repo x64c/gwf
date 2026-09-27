@@ -25,10 +25,11 @@ type Conf struct {
 	// framework used to hardcode 0660 — the deployment states its mode here.
 	SocketMode string `json:"socket_mode"`
 
-	// MaxLineBytes caps ONE command line read from a client connection.
-	// REQUIRED (bytes > 0). Bounds the buffer a client can make the server
-	// grow; an over-cap line gets an error line back and the connection is
-	// closed. Unset, the service used to hardcode 1 MiB (1048576).
+	// MaxLineBytes caps ONE line read from a client connection — a command
+	// line, or an answer a command asks for (Prompter.Ask). REQUIRED (bytes >
+	// 0). Bounds the buffer a client can make the server grow; an over-cap
+	// line gets an error line back and the connection is closed. Unset, the
+	// service used to hardcode 1 MiB (1048576).
 	MaxLineBytes int `json:"max_line_bytes"`
 }
 

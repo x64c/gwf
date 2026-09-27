@@ -7,5 +7,7 @@ type CommandHandler interface {
 	GroupName() string
 	Desc() string
 	Usage() string
-	HandleCommand(args []string, w io.Writer) error
+	// HandleCommand runs the command: args after its name, p for asking the
+	// operator more (a handler that asks nothing ignores it), w for the answer.
+	HandleCommand(args []string, p *Prompter, w io.Writer) error
 }
