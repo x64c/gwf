@@ -7,6 +7,7 @@ import (
 
 	"github.com/x64c/gwf/gw/framework"
 	"github.com/x64c/gwf/gw/security"
+	"github.com/x64c/gwf/gw/uds"
 )
 
 type JwksRotate struct {
@@ -18,7 +19,7 @@ func (h *JwksRotate) Command() string   { return "jwks-rotate" }
 func (h *JwksRotate) Desc() string      { return "Rotate RSA key pair and build jwks" }
 func (h *JwksRotate) Usage() string     { return h.Command() }
 
-func (h *JwksRotate) HandleCommand(_ []string, w io.Writer) error {
+func (h *JwksRotate) HandleCommand(_ []string, _ *uds.Prompter, w io.Writer) error {
 	appCore := h.AppProvider().AppCore()
 	kid, pubKey, err := security.GenerateAndSaveRSAKey(
 		appCore.JwksServiceConf.PrivateKeyDir,

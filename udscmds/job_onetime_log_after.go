@@ -10,6 +10,7 @@ import (
 
 	"github.com/x64c/gwf/gw/framework"
 	"github.com/x64c/gwf/gw/jobsched"
+	"github.com/x64c/gwf/gw/uds"
 )
 
 type JobOnetimeLogAfter struct {
@@ -32,7 +33,7 @@ func (h *JobOnetimeLogAfter) Usage() string {
 	return h.Command() + " delay message"
 }
 
-func (h *JobOnetimeLogAfter) HandleCommand(args []string, w io.Writer) error {
+func (h *JobOnetimeLogAfter) HandleCommand(args []string, _ *uds.Prompter, w io.Writer) error {
 	argLen := len(args)
 	if argLen < 2 {
 		return fmt.Errorf("usage: %s", h.Usage())

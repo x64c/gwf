@@ -5,6 +5,7 @@ import (
 	"io"
 
 	"github.com/x64c/gwf/gw/framework"
+	"github.com/x64c/gwf/gw/uds"
 	"github.com/x64c/gwf/gw/web/session"
 )
 
@@ -28,7 +29,7 @@ func (h *SessionlockGetKeys) Usage() string {
 	return h.Command()
 }
 
-func (h *SessionlockGetKeys) HandleCommand(_ []string, w io.Writer) error {
+func (h *SessionlockGetKeys) HandleCommand(_ []string, _ *uds.Prompter, w io.Writer) error {
 	appCore := h.AppProvider().AppCore()
 	// Node-plane typed access: inspection must work on a stopped service too —
 	// the lock manager is passive state and survives Stop.

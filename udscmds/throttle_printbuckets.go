@@ -6,6 +6,7 @@ import (
 
 	"github.com/x64c/gwf/gw/framework"
 	"github.com/x64c/gwf/gw/throttle"
+	"github.com/x64c/gwf/gw/uds"
 )
 
 type ThrottlePrintBuckets struct {
@@ -28,7 +29,7 @@ func (h *ThrottlePrintBuckets) Usage() string {
 	return h.Command()
 }
 
-func (h *ThrottlePrintBuckets) HandleCommand(_ []string, w io.Writer) error {
+func (h *ThrottlePrintBuckets) HandleCommand(_ []string, _ *uds.Prompter, w io.Writer) error {
 	appCore := h.AppProvider().AppCore()
 	// Node-plane typed reach: inspection must work on a stopped service too —
 	// the buckets are passive state and survive Stop.

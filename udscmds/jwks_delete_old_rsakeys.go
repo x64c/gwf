@@ -6,6 +6,7 @@ import (
 
 	"github.com/x64c/gwf/gw/framework"
 	"github.com/x64c/gwf/gw/security"
+	"github.com/x64c/gwf/gw/uds"
 )
 
 type JwksDeleteOldRsakeys struct {
@@ -17,7 +18,7 @@ func (h *JwksDeleteOldRsakeys) Command() string { return "jwks-delete-old-rsakey
 func (h *JwksDeleteOldRsakeys) Desc() string    { return "Delete Old RSA key pair files" }
 func (h *JwksDeleteOldRsakeys) Usage() string   { return h.Command() }
 
-func (h *JwksDeleteOldRsakeys) HandleCommand(_ []string, w io.Writer) error {
+func (h *JwksDeleteOldRsakeys) HandleCommand(_ []string, _ *uds.Prompter, w io.Writer) error {
 	appCore := h.AppProvider().AppCore()
 	kid, ok, err := appCore.ActiveKid(appCore.RootCtx)
 	if err != nil {

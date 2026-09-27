@@ -5,6 +5,7 @@ import (
 	"io"
 
 	"github.com/x64c/gwf/gw/framework"
+	"github.com/x64c/gwf/gw/uds"
 )
 
 type VolatilekvGetAll struct {
@@ -27,7 +28,7 @@ func (h *VolatilekvGetAll) Usage() string {
 	return h.Command()
 }
 
-func (h *VolatilekvGetAll) HandleCommand(_ []string, w io.Writer) error {
+func (h *VolatilekvGetAll) HandleCommand(_ []string, _ *uds.Prompter, w io.Writer) error {
 	appCore := h.AppProvider().AppCore()
 	volatileKV := appCore.VolatileKV
 	if volatileKV == nil {

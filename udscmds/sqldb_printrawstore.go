@@ -5,6 +5,7 @@ import (
 	"io"
 
 	"github.com/x64c/gwf/gw/framework"
+	"github.com/x64c/gwf/gw/uds"
 )
 
 type SqldbPrintRawStore struct {
@@ -27,7 +28,7 @@ func (h *SqldbPrintRawStore) Usage() string {
 	return h.Command() + " clientname storename [storekey]"
 }
 
-func (h *SqldbPrintRawStore) HandleCommand(args []string, w io.Writer) error {
+func (h *SqldbPrintRawStore) HandleCommand(args []string, _ *uds.Prompter, w io.Writer) error {
 	argLen := len(args)
 	if argLen < 2 || argLen > 3 {
 		return fmt.Errorf("usage: %s", h.Usage())

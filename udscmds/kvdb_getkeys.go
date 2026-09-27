@@ -5,6 +5,7 @@ import (
 	"io"
 
 	"github.com/x64c/gwf/gw/framework"
+	"github.com/x64c/gwf/gw/uds"
 )
 
 type KvdbGetKeys struct {
@@ -27,7 +28,7 @@ func (h *KvdbGetKeys) Usage() string {
 	return h.Command()
 }
 
-func (h *KvdbGetKeys) HandleCommand(_ []string, w io.Writer) error {
+func (h *KvdbGetKeys) HandleCommand(_ []string, _ *uds.Prompter, w io.Writer) error {
 	appCore := h.AppProvider().AppCore()
 	var cursor any = nil
 	for {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/x64c/gwf/gw/framework"
 	"github.com/x64c/gwf/gw/jobsched"
+	"github.com/x64c/gwf/gw/uds"
 )
 
 type JobCronLogEvery5Min struct {
@@ -30,7 +31,7 @@ func (h *JobCronLogEvery5Min) Usage() string {
 	return h.Command() + " message"
 }
 
-func (h *JobCronLogEvery5Min) HandleCommand(args []string, w io.Writer) error {
+func (h *JobCronLogEvery5Min) HandleCommand(args []string, _ *uds.Prompter, w io.Writer) error {
 	argLen := len(args)
 	if argLen < 1 {
 		return fmt.Errorf("usage: %s", h.Usage())

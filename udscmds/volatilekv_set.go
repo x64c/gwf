@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/x64c/gwf/gw/framework"
+	"github.com/x64c/gwf/gw/uds"
 )
 
 type VolatilekvSet struct {
@@ -28,7 +29,7 @@ func (h *VolatilekvSet) Usage() string {
 	return h.Command() + " key value type"
 }
 
-func (h *VolatilekvSet) HandleCommand(args []string, w io.Writer) error {
+func (h *VolatilekvSet) HandleCommand(args []string, _ *uds.Prompter, w io.Writer) error {
 	argLen := len(args)
 	if argLen != 3 {
 		return fmt.Errorf("usage: %s", h.Usage())

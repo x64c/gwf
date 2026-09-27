@@ -8,6 +8,7 @@ import (
 
 	"github.com/x64c/gwf/gw/framework"
 	"github.com/x64c/gwf/gw/security"
+	"github.com/x64c/gwf/gw/uds"
 )
 
 type JwksKidSet struct {
@@ -21,7 +22,7 @@ func (*JwksKidSet) Desc() string {
 }
 func (h *JwksKidSet) Usage() string { return h.Command() + " [kid]" }
 
-func (h *JwksKidSet) HandleCommand(args []string, w io.Writer) error {
+func (h *JwksKidSet) HandleCommand(args []string, _ *uds.Prompter, w io.Writer) error {
 	appCore := h.AppProvider().AppCore()
 	privKeyDir := appCore.JwksServiceConf.PrivateKeyDir
 

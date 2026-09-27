@@ -5,6 +5,7 @@ import (
 	"io"
 
 	"github.com/x64c/gwf/gw/framework"
+	"github.com/x64c/gwf/gw/uds"
 )
 
 type KvdbGetType struct {
@@ -27,7 +28,7 @@ func (h *KvdbGetType) Usage() string {
 	return h.Command() + " key"
 }
 
-func (h *KvdbGetType) HandleCommand(args []string, w io.Writer) error {
+func (h *KvdbGetType) HandleCommand(args []string, _ *uds.Prompter, w io.Writer) error {
 	argLen := len(args)
 	if argLen != 1 {
 		return fmt.Errorf("usage: %s", h.Usage())

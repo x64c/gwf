@@ -5,6 +5,7 @@ import (
 	"io"
 
 	"github.com/x64c/gwf/gw/svc"
+	"github.com/x64c/gwf/gw/uds"
 )
 
 // Svc is the umbrella UDS command for controlling framework services:
@@ -61,7 +62,7 @@ func (h *Svc) Usage() string {
 	return "svc list | svc help [service] | svc <subcmd> <service> [args]"
 }
 
-func (h *Svc) HandleCommand(args []string, w io.Writer) error {
+func (h *Svc) HandleCommand(args []string, _ *uds.Prompter, w io.Writer) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: %s", h.Usage())
 	}

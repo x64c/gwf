@@ -6,6 +6,7 @@ import (
 
 	"github.com/x64c/gwf/gw/errs"
 	"github.com/x64c/gwf/gw/framework"
+	"github.com/x64c/gwf/gw/uds"
 )
 
 type FwupstreamGetTokens struct {
@@ -28,7 +29,7 @@ func (h *FwupstreamGetTokens) Usage() string {
 	return h.Command() + " session-row-key client-id"
 }
 
-func (h *FwupstreamGetTokens) HandleCommand(args []string, w io.Writer) error {
+func (h *FwupstreamGetTokens) HandleCommand(args []string, _ *uds.Prompter, w io.Writer) error {
 	argLen := len(args)
 	if argLen != 2 {
 		return fmt.Errorf("usage: %s", h.Usage())
