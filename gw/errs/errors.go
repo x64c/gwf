@@ -68,6 +68,12 @@ var (
 	IDPUnavailable         = &Error{Name: "IDPUnavailable", Code: 1332, Message: "identity provider unavailable"}              // JWKS / token endpoint / auth server unreachable or answering garbage
 	AuthClientMismatch     = &Error{Name: "AuthClientMismatch", Code: 1333, Message: "auth client mismatch"}                   // a verify request's auth_client_id is not the IdP client configured for the caller
 
+	// ---- Passwords
+
+	InvalidCredentials  = &Error{Name: "InvalidCredentials", Code: 1340, Message: "invalid name or password"} // an unknown name and a wrong password alike — one answer, so none reveals which names exist
+	PasswordCheckBusy   = &Error{Name: "PasswordCheckBusy", Code: 1341, Message: "password check busy"}       // every hashing slot was taken until the request gave up — capacity, not a verdict
+	InvalidLoginRequest = &Error{Name: "InvalidLoginRequest", Code: 1342, Message: "invalid login request"}   // neither a form post nor a JSON body, or one that cannot be read — detail says which
+
 	// Data Format & Serialization
 
 	JSONMarshalFailed   = &Error{Name: "JSONMarshalFailed", Code: 1400, Message: "failed to marshal JSON"}
