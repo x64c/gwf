@@ -83,7 +83,7 @@ func (m *CookieUserSession[UID]) authenticateCookieSession(
 	if err != nil { // http.ErrNoCookie
 		// Session Cookie Not Found = Non-login Hit to Auth-protected Endpoints
 		// Redirect to Login page setting Intended URI Cookie
-		cookie.SetIntendedURICookie(w, r, 60) // short-lived cookie
+		setIntendedURICookie(w, r, mgr)
 		http.Redirect(w, r, mgr.Conf.UserSession.LoginPath+"?endpoint=protected", http.StatusSeeOther)
 		return nil, nil, "", "", false
 	}
@@ -94,7 +94,7 @@ func (m *CookieUserSession[UID]) authenticateCookieSession(
 		// send the human back to login. A bare error here would strand the
 		// browser — the cookie would be re-presented on every request.
 		mgr.DeleteUserSessionCookie(w)
-		cookie.SetIntendedURICookie(w, r, 60)
+		setIntendedURICookie(w, r, mgr)
 		http.Redirect(w, r, mgr.Conf.UserSession.LoginPath+"?session=invalid", http.StatusSeeOther)
 		return nil, nil, "", "", false
 	}
@@ -109,7 +109,7 @@ func (m *CookieUserSession[UID]) authenticateCookieSession(
 		// Session Not Found. Session might have been Expired.
 		// Redirect to Login page Clearing Session Cookie
 		mgr.DeleteUserSessionCookie(w)
-		cookie.SetIntendedURICookie(w, r, 60)
+		setIntendedURICookie(w, r, mgr)
 		http.Redirect(w, r, mgr.Conf.UserSession.LoginPath+"?session=expired", http.StatusSeeOther)
 		return nil, nil, "", "", false
 	}
@@ -125,7 +125,7 @@ func (m *CookieUserSession[UID]) authenticateCookieSession(
 		// the same corrupt row on every request with no way back.
 		_ = mgr.DeleteUserSessionKVDB(ctx, sessionID)
 		mgr.DeleteUserSessionCookie(w)
-		cookie.SetIntendedURICookie(w, r, 60)
+		setIntendedURICookie(w, r, mgr)
 		http.Redirect(w, r, mgr.Conf.UserSession.LoginPath+"?session=invalid", http.StatusSeeOther)
 		return nil, nil, "", "", false
 	}
@@ -164,4 +164,12 @@ func (m *CookieUserSession[UID]) slidingExpHandler(inner http.Handler, mgr *cook
 
 		inner.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// setIntendedURICookie saves a refused request's URI for the login to return to, for
+// intended_uri_expire_in seconds; at 0 nothing is saved and the login goes to its success path.
+func setIntendedURICookie(w http.ResponseWriter, r *http.Request, mgr *cookie.SessionManager) {
+	if expireIn := *mgr.Conf.UserSession.IntendedURIExpireIn; expireIn > 0 {
+		cookie.SetIntendedURICookie(w, r, expireIn)
+	}
 }

@@ -66,11 +66,12 @@ const (
 
 // UserSessionConf is the cookie session config for the user-bound shape (logged-in users).
 type UserSessionConf struct {
-	ExpireIn           int        `json:"expire_in"` // seconds
-	ExpireMode         ExpireMode `json:"expire_mode"`
-	ExtendThreshold    int        `json:"extend_threshold"` // seconds; for sliding
-	LoginPath          string     `json:"login_path"`
-	MaxSessionsPerUser int64      `json:"max_sessions_per_user"`
+	ExpireIn            int        `json:"expire_in"` // seconds
+	ExpireMode          ExpireMode `json:"expire_mode"`
+	ExtendThreshold     int        `json:"extend_threshold"` // seconds; for sliding
+	LoginPath           string     `json:"login_path"`
+	MaxSessionsPerUser  int64      `json:"max_sessions_per_user"`
+	IntendedURIExpireIn *int       `json:"intended_uri_expire_in"` // seconds; 0 = the intended-URI cookie is never set
 }
 
 // AnonymousSessionConf is the cookie session config for the anonymous shape —
@@ -116,6 +117,12 @@ func (c *UserSessionConf) Validate() error {
 	}
 	if c.MaxSessionsPerUser < 0 {
 		return fmt.Errorf("user cookie session: max_sessions_per_user must be >= 0 (got %d)", c.MaxSessionsPerUser)
+	}
+	if c.IntendedURIExpireIn == nil {
+		return fmt.Errorf("user cookie session: intended_uri_expire_in must be set (0 = off, > 0 = seconds)")
+	}
+	if *c.IntendedURIExpireIn < 0 {
+		return fmt.Errorf("user cookie session: intended_uri_expire_in must be >= 0 (got %d)", *c.IntendedURIExpireIn)
 	}
 	return nil
 }
