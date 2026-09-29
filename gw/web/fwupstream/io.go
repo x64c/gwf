@@ -71,20 +71,9 @@ func (h *Hub) FetchRefreshToken(ctx context.Context, rowKey, clientID string) (s
 // — leaving encrypted upstream credentials with nothing to expire them and no
 // session to own them.
 func (h *Hub) StoreTokenPair(ctx context.Context, rowKey, clientID, accessTkn, refreshTkn string) *errs.Error {
-	if h == nil || h.TokenCipher == nil {
-		return errs.UpstreamTokenCipherNotSet
-	}
-	encAccess, err := h.TokenCipher.EncryptEncode([]byte(accessTkn), security.CipherContext{Location: rowKey, Field: AccessTokenField(clientID)})
-	if err != nil {
-		return errs.Upstream.WithDetail("encrypting upstream access token").WithCause(err)
-	}
-	encRefresh, err := h.TokenCipher.EncryptEncode([]byte(refreshTkn), security.CipherContext{Location: rowKey, Field: RefreshTokenField(clientID)})
-	if err != nil {
-		return errs.Upstream.WithDetail("encrypting upstream refresh token").WithCause(err)
-	}
-	fields := map[string]any{
-		AccessTokenField(clientID):  encAccess,
-		RefreshTokenField(clientID): encRefresh,
+	fields, resErr := h.TokenPairFields(rowKey, clientID, accessTkn, refreshTkn)
+	if resErr != nil {
+		return resErr
 	}
 	existed, err := h.KVDB.HashSetFieldsIfExists(ctx, rowKey, fields)
 	if err != nil {
@@ -94,6 +83,29 @@ func (h *Hub) StoreTokenPair(ctx context.Context, rowKey, clientID, accessTkn, r
 		return errs.Upstream.WithDetail("session row ended before its upstream tokens could be stored")
 	}
 	return nil
+}
+
+// TokenPairFields encrypts the access + refresh tokens for clientID, each bound
+// to rowKey and its field, and returns them as the fields StoreTokenPair
+// writes — for a caller that writes them together with the row itself (a login
+// storing a new session), so the encryption can fail before anything is
+// written.
+func (h *Hub) TokenPairFields(rowKey, clientID, accessTkn, refreshTkn string) (map[string]any, *errs.Error) {
+	if h == nil || h.TokenCipher == nil {
+		return nil, errs.UpstreamTokenCipherNotSet
+	}
+	encAccess, err := h.TokenCipher.EncryptEncode([]byte(accessTkn), security.CipherContext{Location: rowKey, Field: AccessTokenField(clientID)})
+	if err != nil {
+		return nil, errs.Upstream.WithDetail("encrypting upstream access token").WithCause(err)
+	}
+	encRefresh, err := h.TokenCipher.EncryptEncode([]byte(refreshTkn), security.CipherContext{Location: rowKey, Field: RefreshTokenField(clientID)})
+	if err != nil {
+		return nil, errs.Upstream.WithDetail("encrypting upstream refresh token").WithCause(err)
+	}
+	return map[string]any{
+		AccessTokenField(clientID):  encAccess,
+		RefreshTokenField(clientID): encRefresh,
+	}, nil
 }
 
 // StoreAccessToken writes the encrypted access token for clientID on the

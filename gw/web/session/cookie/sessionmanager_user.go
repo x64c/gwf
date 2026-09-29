@@ -2,7 +2,9 @@ package cookie
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"time"
 
@@ -19,43 +21,71 @@ func (m *SessionManager) UserSessionRowExists(ctx context.Context, sessionID str
 	return m.KVDB.Exists(ctx, m.UserSessionRowKey(sessionID))
 }
 
-// CreateUserSession creates a complete user session: stores the row in KVDB
-// via StoreUserSession, then sets the browser cookie via SetUserSessionCookie.
+// CreateUserSession creates a complete user session: NewUserSessionID, then
+// StoreUserSession, then the browser cookie via SetUserSessionCookie.
 func (m *SessionManager) CreateUserSession(ctx context.Context, w http.ResponseWriter, uidStr string) (string, error) {
-	sid, err := m.StoreUserSession(ctx, uidStr)
+	sid, sealedCookieValue, err := m.NewUserSessionID()
 	if err != nil {
 		return "", err
 	}
-	if err := m.SetUserSessionCookie(w, sid); err != nil {
+	if err = m.StoreUserSession(ctx, sid, uidStr, nil); err != nil {
 		return "", err
 	}
+	m.SetUserSessionCookie(w, sealedCookieValue)
 	return sid, nil
 }
 
-// StoreUserSession creates a new user session: writes the umbrella row to KVDB
-// (uid + csrf, with sliding TTL), and pushes the new sid into the per-user cap
-// list (if MaxSessionsPerUser > 0), evicting oldest sessions if over the cap.
-// Returns the generated sessionID. The caller is responsible for setting the
-// cookie via SetUserSessionCookie.
-func (m *SessionManager) StoreUserSession(ctx context.Context, uidStr string) (string, error) {
+// NewUserSessionID makes a new user session's ID and seals it into the value
+// its cookie carries (UserCookieCipher). It writes nothing: a login makes the
+// ID, and everything else that can fail, before StoreUserSession — whose cap
+// eviction then can no longer be followed by a failure.
+func (m *SessionManager) NewUserSessionID() (string, string, error) {
 	sessionID := security.GenerateHex(16)
-	csrfTkn := security.GenerateBase64RawURL(32)
+	sealedCookieValue, err := m.UserCookieCipher.EncryptEncode([]byte(sessionID), m.UserCookieCipherContext())
+	if err != nil {
+		return "", "", fmt.Errorf("failed to encrypt user session id. %v", err)
+	}
+	return sessionID, sealedCookieValue, nil
+}
+
+// StoreUserSession stores a new user session under sessionID (NewUserSessionID):
+// writes the umbrella row to KVDB — uid + csrf + fields, with sliding TTL, in
+// one write — then pushes sessionID into the per-user cap list (if
+// MaxSessionsPerUser > 0), evicting oldest sessions if over the cap.
+//
+// The eviction is the last write, so a failure before it costs no other
+// session. When the push itself fails nothing was evicted, and the row is
+// deleted again (best effort; its TTL ends it otherwise).
+//
+// fields are what the login writes with the session, e.g.
+// UserUpstreamTokenPairFields; they may not name "uid" or "csrf".
+func (m *SessionManager) StoreUserSession(ctx context.Context, sessionID, uidStr string, fields map[string]any) error {
+	if _, ok := fields["uid"]; ok {
+		return errors.New("StoreUserSession: fields may not name uid")
+	}
+	if _, ok := fields["csrf"]; ok {
+		return errors.New("StoreUserSession: fields may not name csrf")
+	}
+	row := make(map[string]any, len(fields)+2)
+	maps.Copy(row, fields)
+	row["uid"] = uidStr
+	row["csrf"] = security.GenerateBase64RawURL(32)
 	slidingExpiration := time.Duration(m.Conf.UserSession.ExpireIn) * time.Second
 	key := m.UserSessionRowKey(sessionID)
-	fields := map[string]any{"uid": uidStr, "csrf": csrfTkn}
-	if err := m.KVDB.HashSetFieldsWithKeyTTL(ctx, key, fields, slidingExpiration); err != nil {
-		return "", err
+	if err := m.KVDB.HashSetFieldsWithKeyTTL(ctx, key, row, slidingExpiration); err != nil {
+		return err
 	}
 
 	if m.Conf.UserSession.MaxSessionsPerUser > 0 {
 		usrSessionListKey := fmt.Sprintf("%s:cul:%s", m.appName, uidStr)
 		// UserSessionRowKey("") is the row-key prefix: each evicted session's row is deleted at prefix + sid.
 		if err := caplist.PushEvictOverCap(ctx, m.KVDB, usrSessionListKey, sessionID, m.Conf.UserSession.MaxSessionsPerUser, slidingExpiration, m.UserSessionRowKey("")); err != nil {
-			return "", err
+			_, _ = m.KVDB.Delete(ctx, key)
+			return err
 		}
 	}
 
-	return sessionID, nil
+	return nil
 }
 
 // FetchUserSession reads the user session row from KVDB.
@@ -133,23 +163,18 @@ func (m *SessionManager) ExtendUserSessionKVDBWithTTL(ctx context.Context, sessi
 }
 
 // SetUserSessionCookie writes the Set-Cookie HTTP response header for a user
-// session, with the sessionID encrypted via UserCookieCipher. MaxAge matches
+// session, carrying sealedCookieValue (NewUserSessionID). MaxAge matches
 // Conf.UserSession.ExpireIn. HttpOnly + Secure + SameSite=Lax.
-func (m *SessionManager) SetUserSessionCookie(w http.ResponseWriter, sessionID string) error {
-	encSessionID, err := m.UserCookieCipher.EncryptEncode([]byte(sessionID), m.UserCookieCipherContext())
-	if err != nil {
-		return fmt.Errorf("failed to encrypt user session id. %v", err)
-	}
+func (m *SessionManager) SetUserSessionCookie(w http.ResponseWriter, sealedCookieValue string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     UserCookieName,
-		Value:    encSessionID,
+		Value:    sealedCookieValue,
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   true,
 		MaxAge:   m.Conf.UserSession.ExpireIn,
 		SameSite: http.SameSiteLaxMode,
 	})
-	return nil
 }
 
 // ExtendUserSessionCookie resets the user session cookie's MaxAge using

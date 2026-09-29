@@ -34,7 +34,7 @@ compositions the parts have been exercised in.
 | `auth/oidc` | Relying-party halves for the OIDC authorization-code flow with PKCE. `Provider.AuthCodeURL` (initiate), `Provider.VerifyAuthCode` (verify). A `Provider` is described entirely by configuration; `WebLoginConfs` (`LoadWebLoginConfs`) holds an app's browser logins keyed by identity provider id — `{"<idp id>": {"provider": {…}, "redirect_uri": "…"}}`. |
 | `auth/fwauthserver` | Verify half delegated to an auth server: `Verifier.VerifyAuthCode` forwards the code and flow secrets, validates the auth server's ID token against its JWKS. |
 | `auth/jwtassert` | Machine authentication: `Signer` (client half), `Verifier` (receiving half), `Gate` (handler wrapper). `SignerConfs` (`LoadSignerConfs`, `NewSigner`) holds a downstream's signers keyed by fwupstream client id — `{"<client id>": {"kid": …, "private_key_path": …, "audience": …, "max_age": …}}`. |
-| `security` | Wire bodies between an initiating app and an auth server: `AuthRequestBody`, `AuthResponseBody`, `RefreshAccessTokenRequestBody`. |
+| `security` | Wire bodies: `AuthRequestBody` and `AccessTokenAndIDTokenResponseBody` between an initiating app and an auth server; `AccessTokenResponseBody` (a token issue without an ID token); `RefreshAccessTokenRequestBody`. |
 | `session/cookie`, `session/bearer` | Session flavors; session rows live in the KVDB. Each row carries per-upstream token slots. |
 | `fwupstream` | Downstream side of an upstream relationship: client configuration, bearer-carrying request ladder, access-token refresh, upstream JWKS fetch. |
 | `handlerwrappers` | Gates by session flavor and by bearer client registration. |
@@ -70,7 +70,7 @@ browser ── GET callback endpoint ───────▶ app          Consu
 app     ── POST verify endpoint ────────▶ auth server  AuthRequestBody {auth_client_id, code, redirect_uri, nonce, pkce_verifier}
                                           auth server  Provider.VerifyAuthCode with the IdP; map identity → user;
                                                        bearer.SessionManager.CreateSession; sign id_token with own JWKS key
-app     ◀─ 200 AuthResponseBody ────────  auth server  {access_token, refresh_token, expires_in, token_type, id_token}
+app     ◀─ 200 ─────────────────────────  auth server  AccessTokenAndIDTokenResponseBody {access_token, refresh_token, expires_in, token_type, id_token}
 app                                                    fwauthserver.Verifier validates id_token; map Subject → user;
                                                        cookie session; store the token pair on the session row
 browser ◀─ Set-Cookie; 302 ─────────────  app
@@ -84,14 +84,14 @@ in the app, and the code returns on the app's own redirect:
 app     ── authorization request ───────▶ IdP          state, nonce, S256 challenge
 app     ◀─ redirect?code&state ─────────  IdP          the app compares state
 app     ── POST verify endpoint ────────▶ auth server  Client-Id; AuthRequestBody, as above
-app     ◀─ 200 AuthResponseBody ────────  auth server
+app     ◀─ 200 ─────────────────────────  auth server  AccessTokenAndIDTokenResponseBody, as above
 ```
 
 | Side | Parts |
 |---|---|
-| Framework app serving a browser | `authn.FlowManager` · `oidc.Provider` (initiate half; `ClientSecret` empty) · `oidc.AuthCodeRequestHandler` (login endpoint) · `fwauthserver.DelegatedExchangeCallbackHandler` (callback endpoint: ticket → `fwauthserver.Verifier` → `authn.UIDStrResolver` → cookie session + token pair → `cookie.FinishLogin`) · `cookie.SessionManager` |
+| Framework app serving a browser | `authn.FlowManager` · `oidc.Provider` (initiate half; `ClientSecret` empty) · `oidc.AuthCodeRequestHandler` (login endpoint) · `fwauthserver.DelegatedExchangeCallbackHandler` (callback endpoint: ticket → `fwauthserver.Verifier` → `authn.UIDStrResolver` → sealed session id → cookie session with the token pair, one write → `cookie.FinishLogin`) · `cookie.SessionManager` |
 | App holding the token pair itself | No framework part: the initiate half and the refresh ladder are its own code. |
-| Auth server | `oidc.DelegatedExchangeAuthCodeVerifyHandler` (verify endpoint: caller by `Client-Id` → its `oidc.Provider` → `authn.UIDStrResolver` → optional `Admit` (refusal with its own status) → optional `ExtendResponse` (fields added beside the tokens) → bearer session → ID token signed with the active JWKS key, `Core.SignIDToken`) · `oidc.Provider` (verify half; holds the client secret) · `bearer.SessionManager` (a session group per client kind; clients registered by name → opaque id) · `bearer.RefreshAccessTokenHandler` · JWKS |
+| Auth server | `oidc.DelegatedExchangeAuthCodeVerifyHandler` (verify endpoint: caller by `Client-Id` → its `oidc.Provider` → `authn.UIDStrResolver` → optional `Admit` (refusal with its own status) → optional `ExtendResponse` (fields added beside the tokens) → ID token signed with the active JWKS key, `Core.SignIDToken` → bearer session) · `oidc.Provider` (verify half; holds the client secret) · `bearer.SessionManager` (a session group per client kind; clients registered by name → opaque id) · `bearer.RefreshAccessTokenHandler` · JWKS |
 
 Configuration on a framework app: `fwupstream.ClientConf` — `host`,
 `client_id` (the framework app's id at the auth server), `verify_external_auth_code`
@@ -127,14 +127,19 @@ browser ◀─ Set-Cookie; 302 ─────────────  app
 Parts: `authn.FlowManager` · `oidc.Provider` (both halves) ·
 `oidc.AuthCodeRequestHandler` (login endpoint) ·
 `oidc.DirectExchangeCallbackHandler` (callback endpoint: ticket → verify →
-`authn.UIDStrResolver` → cookie session → `cookie.FinishLogin`) ·
-`cookie.SessionManager`.
+`authn.UIDStrResolver` → sealed session id → cookie session →
+`cookie.FinishLogin`) · `cookie.SessionManager`.
 
 `authn.UIDStrResolver` is the app's: it maps the verified identity to the
 uid string the session stores, or refuses (answered 401 with its error).
 Which claim identifies the person, where users live, and what "may log in"
 means are decided there. `cookie.FinishLogin` sets the session cookie and
 redirects to the saved intended URI or the handler's `SuccessPath`.
+
+Every login handler runs each step that can fail — sealing the session id,
+encrypting upstream tokens, signing an ID token — before it stores the
+session, and the store's cap eviction (a user's oldest session over the
+cap) is its last write: a failed login costs no other session.
 
 `VerifyAuthCode` validates: RSA signature via the provider's JWKS, `exp`,
 `aud` = `ClientID`, `iss` = `Issuer`, nonce echo, `RequiredClaims` equality,

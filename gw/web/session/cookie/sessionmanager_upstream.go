@@ -37,6 +37,14 @@ func (m *SessionManager) UserStoreUpstreamTokenPair(ctx context.Context, sid, cl
 	return m.FWUpstream.StoreTokenPair(ctx, m.UserSessionRowKey(sid), clientID, accessTkn, refreshTkn)
 }
 
+// UserUpstreamTokenPairFields returns the access + refresh tokens for the given
+// clientID, encrypted for the user cookie session row sid, as the fields
+// StoreUserSession writes with that row — for a login that stores a new
+// session with its upstream tokens in one write.
+func (m *SessionManager) UserUpstreamTokenPairFields(sid, clientID, accessTkn, refreshTkn string) (map[string]any, *errs.Error) {
+	return m.FWUpstream.TokenPairFields(m.UserSessionRowKey(sid), clientID, accessTkn, refreshTkn)
+}
+
 // AnonymousStoreUpstreamTokenPair writes the access + refresh tokens for the given
 // clientID atomically as fields on the anonymous cookie session row. The session row's
 // existing TTL is preserved (children inherit lifetime from the parent).
