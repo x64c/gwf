@@ -28,7 +28,7 @@ import (
 //
 // Refusals: 403 InvalidFlowTicket · 400 AuthCodeNotFound · 503 IDPUnavailable
 // · 401 with the verify error (AuthCodeExchangeFailed, IDTokenInvalid) · 401
-// with Resolve's error · 500 KVDB / InternalError (session row / cookie).
+// with Resolve's error · 500 InternalError / KVDB (cookie seal / session row).
 type DirectExchangeCallbackHandler struct {
 	Provider    *Provider
 	RedirectURI string
@@ -70,13 +70,14 @@ func (h *DirectExchangeCallbackHandler) ServeHTTP(w http.ResponseWriter, r *http
 		return
 	}
 
-	sessionID, err := h.Sessions.StoreUserSession(ctx, uidStr)
+	sessionID, sealedCookieValue, err := h.Sessions.NewUserSessionID()
 	if err != nil {
+		responses.WriteErrorJSON(w, http.StatusInternalServerError, errs.InternalError.WithDetail("failed to seal session cookie").WithCause(err))
+		return
+	}
+	if err = h.Sessions.StoreUserSession(ctx, sessionID, uidStr, nil); err != nil {
 		responses.WriteErrorJSON(w, http.StatusInternalServerError, errs.KVDB.WithDetail("failed to create session").WithCause(err))
 		return
 	}
-	if err = cookie.FinishLogin(w, r, h.Sessions, sessionID, h.SuccessPath); err != nil {
-		responses.WriteErrorJSON(w, http.StatusInternalServerError, errs.InternalError.WithDetail("failed to set session cookie").WithCause(err))
-		return
-	}
+	cookie.FinishLogin(w, r, h.Sessions, sealedCookieValue, h.SuccessPath)
 }

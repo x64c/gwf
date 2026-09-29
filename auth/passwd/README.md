@@ -59,7 +59,7 @@ One per session flavor; each reads a form post or a JSON body (`passwd.NameField
 | handler | opens | wire it behind |
 |---|---|---|
 | `passwd.CookieLoginHandler` | a cookie session, then `cookie.FinishLogin` (303 to the intended URI or `SuccessPath`); refusals a JSON error, or a 303 to `FailurePath` | `CheckOriginHeader` (a login form has no session yet to carry a CSRF token), a body limit, the throttles |
-| `passwd.BearerLoginHandler` | a bearer session for the `Client-Id`'s client (a client under `""` serves callers that send none), answering `security.AuthResponseBody` with the app's own ID token | a body limit, the throttles |
+| `passwd.BearerLoginHandler` | a bearer session for the `Client-Id`'s client (a client under `""` serves callers that send none), answering `security.AccessTokenResponseBody` — with a `SignIDToken`, `security.AccessTokenAndIDTokenResponseBody` carrying the app's own ID token | a body limit, the throttles |
 
 `passwd.NameThrottleKey(normalize)` keys `handlerwrappers.ThrottleFixedGroup` by the name a login
 carries, normalized by the app's own rule — so one account's guesses are bounded however many

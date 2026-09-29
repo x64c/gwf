@@ -20,9 +20,10 @@ import (
 // Code Exchange flow's verify endpoint on the auth-server side: it verifies
 // an authorization code a registered client obtained — exchanging it with
 // the IdP and validating the returned ID token — resolves the verified
-// identity to the app's user through Resolve, opens a bearer session for
-// the client + user, signs the auth server's own ID token, and answers the
-// security.AuthResponseBody the client's fwauthserver.Verifier expects.
+// identity to the app's user through Resolve, signs the auth server's own ID
+// token, opens a bearer session for the client + user, and answers the
+// security.AccessTokenAndIDTokenResponseBody the client's
+// fwauthserver.Verifier expects.
 //
 // The caller is identified by its Client-Id header (a registered bearer
 // client); Providers maps each client's NAME to the IdP client it
@@ -46,7 +47,7 @@ import (
 // (500 InternalError when that status is not 4xx/5xx) · ExtendResponse's
 // status with its error (500 InternalError when that status is not 4xx/5xx,
 // or when its value is not a JSON object free of the token fields' names) ·
-// 500 KVDB / InternalError (session, signing).
+// 500 InternalError / KVDB (signing, session).
 type DelegatedExchangeAuthCodeVerifyHandler struct {
 	Providers map[string]*Provider
 	Bearer    *bearer.SessionManager
@@ -136,7 +137,7 @@ func (h *DelegatedExchangeAuthCodeVerifyHandler) ServeHTTP(w http.ResponseWriter
 			responses.WriteErrorJSON(w, status, e)
 			return
 		}
-		tokenFields, err := json.Marshal(security.AuthResponseBody{})
+		tokenFields, err := json.Marshal(security.AccessTokenAndIDTokenResponseBody{})
 		if err == nil {
 			extension, err = json.Marshal(v)
 		}
@@ -151,6 +152,16 @@ func (h *DelegatedExchangeAuthCodeVerifyHandler) ServeHTTP(w http.ResponseWriter
 		}
 	}
 
+	// The ID token is signed before the session opens too, so a failed signing
+	// leaves no session behind — nor evicts one of the user's sessions from a
+	// capped group.
+	email, _ := verified.Claims["email"].(string)
+	idToken, err := h.SignIDToken(ctx, h.Issuer, uidStr, email, clientConf.ID, h.IDTokenTTL)
+	if err != nil {
+		responses.WriteErrorJSON(w, http.StatusInternalServerError, errs.InternalError.WithDetail("failed to sign id_token").WithCause(err))
+		return
+	}
+
 	_, accessToken, refreshToken, err := h.Bearer.CreateSession(ctx, clientConf.Group, map[string]string{
 		"client": clientConf.ID,
 		"user":   uidStr,
@@ -160,19 +171,14 @@ func (h *DelegatedExchangeAuthCodeVerifyHandler) ServeHTTP(w http.ResponseWriter
 		return
 	}
 
-	email, _ := verified.Claims["email"].(string)
-	idToken, err := h.SignIDToken(ctx, h.Issuer, uidStr, email, clientConf.ID, h.IDTokenTTL)
-	if err != nil {
-		responses.WriteErrorJSON(w, http.StatusInternalServerError, errs.InternalError.WithDetail("failed to sign id_token").WithCause(err))
-		return
-	}
-
-	body := security.AuthResponseBody{
-		AccessToken:  accessToken,
-		RefreshToken: refreshToken,
-		ExpiresIn:    int64(clientConf.Group.AccessTTL),
-		TokenType:    "bearer",
-		IDToken:      idToken,
+	body := security.AccessTokenAndIDTokenResponseBody{
+		AccessTokenResponseBody: security.AccessTokenResponseBody{
+			AccessToken:  accessToken,
+			RefreshToken: refreshToken,
+			ExpiresIn:    int64(clientConf.Group.AccessTTL),
+			TokenType:    "bearer",
+		},
+		IDToken: idToken,
 	}
 	if extension == nil {
 		responses.EncodeWriteJSON(w, http.StatusOK, body)

@@ -31,7 +31,7 @@ type Verifier struct {
 // Failures are *UpstreamError (the auth server answered non-200 — forward
 // it), errs.IDTokenInvalid (detail says which check), or errs.IDPUnavailable
 // (auth server or its JWKS unreachable).
-func (v *Verifier) VerifyAuthCode(ctx context.Context, req security.AuthRequestBody) (authn.VerifiedIdentity, *security.AuthResponseBody, error) {
+func (v *Verifier) VerifyAuthCode(ctx context.Context, req security.AuthRequestBody) (authn.VerifiedIdentity, *security.AccessTokenAndIDTokenResponseBody, error) {
 	endpoint, ok := v.Upstream.Conf.VerifyAuthCodeEndpoints[v.ProviderID]
 	if !ok {
 		return authn.VerifiedIdentity{}, nil, fmt.Errorf("fwauthserver: no verify endpoint for provider %q", v.ProviderID)
@@ -57,7 +57,7 @@ func (v *Verifier) VerifyAuthCode(ctx context.Context, req security.AuthRequestB
 		return authn.VerifiedIdentity{}, nil, &UpstreamError{StatusCode: res.StatusCode, Body: body}
 	}
 
-	var authRes security.AuthResponseBody
+	var authRes security.AccessTokenAndIDTokenResponseBody
 	if err = json.UnmarshalRead(res.Body, &authRes); err != nil {
 		return authn.VerifiedIdentity{}, nil, errs.IDPUnavailable.Wrap(fmt.Errorf("response decode: %w", err))
 	}

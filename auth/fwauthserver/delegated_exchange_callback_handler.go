@@ -15,8 +15,8 @@ import (
 // flow's callback endpoint on the browser-facing side: it consumes the flow
 // ticket, forwards the returned code (with the ticket's nonce and PKCE
 // verifier) to the auth server through Verifier, resolves the verified
-// identity to the app's user through Resolve, opens a cookie session, stores
-// the auth server's token pair on the session row, and finishes the login
+// identity to the app's user through Resolve, opens a cookie session with the
+// auth server's token pair on its row (one write), and finishes the login
 // (cookie set; redirect to the intended URI or SuccessPath).
 //
 // AuthClientID is the IdP client id the initiate half used; the auth server
@@ -36,8 +36,8 @@ import (
 //
 // Refusals: 403 InvalidFlowTicket · 400 AuthCodeNotFound · the auth server's
 // own answer, forwarded whole, when it refused (*UpstreamError) · 503
-// IDPUnavailable · 401 IDTokenInvalid · 401 with Resolve's error · 500 KVDB /
-// InternalError (session row, token pair, cookie).
+// IDPUnavailable · 401 IDTokenInvalid · 401 with Resolve's error · 500
+// InternalError / Upstream / KVDB (cookie seal, token pair, session row).
 type DelegatedExchangeCallbackHandler struct {
 	Verifier     *Verifier
 	AuthClientID string
@@ -91,17 +91,19 @@ func (h *DelegatedExchangeCallbackHandler) ServeHTTP(w http.ResponseWriter, r *h
 		return
 	}
 
-	sessionID, err := h.Sessions.StoreUserSession(ctx, uidStr)
+	sessionID, sealedCookieValue, err := h.Sessions.NewUserSessionID()
 	if err != nil {
-		responses.WriteErrorJSON(w, http.StatusInternalServerError, errs.KVDB.WithDetail("failed to create session").WithCause(err))
+		responses.WriteErrorJSON(w, http.StatusInternalServerError, errs.InternalError.WithDetail("failed to seal session cookie").WithCause(err))
 		return
 	}
-	if resErr = h.Sessions.UserStoreUpstreamTokenPair(ctx, sessionID, h.Verifier.Upstream.ID, authRes.AccessToken, authRes.RefreshToken); resErr != nil {
+	tokenFields, resErr := h.Sessions.UserUpstreamTokenPairFields(sessionID, h.Verifier.Upstream.ID, authRes.AccessToken, authRes.RefreshToken)
+	if resErr != nil {
 		responses.WriteErrorJSON(w, http.StatusInternalServerError, resErr)
 		return
 	}
-	if err = cookie.FinishLogin(w, r, h.Sessions, sessionID, h.SuccessPath); err != nil {
-		responses.WriteErrorJSON(w, http.StatusInternalServerError, errs.InternalError.WithDetail("failed to set session cookie").WithCause(err))
+	if err = h.Sessions.StoreUserSession(ctx, sessionID, uidStr, tokenFields); err != nil {
+		responses.WriteErrorJSON(w, http.StatusInternalServerError, errs.KVDB.WithDetail("failed to create session").WithCause(err))
 		return
 	}
+	cookie.FinishLogin(w, r, h.Sessions, sealedCookieValue, h.SuccessPath)
 }

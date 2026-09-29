@@ -32,7 +32,7 @@ import (
 //
 // Refusals — every one either a JSON error or, with FailurePath set, a 303 to it: 400
 // InvalidLoginRequest / JSONUnmarshalFailed · 401 InvalidCredentials · 503 PasswordCheckBusy · 401
-// with Resolve's error · 500 InternalError / KVDB (lookup, session row, cookie). A wrong name and a
+// with Resolve's error · 500 InternalError / KVDB (lookup, cookie seal, session row). A wrong name and a
 // wrong password are one refusal, InvalidCredentials, so none reveals which names exist.
 type CookieLoginHandler struct {
 	Verifier    *Verifier
@@ -61,14 +61,16 @@ func (h *CookieLoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.refuse(w, r, http.StatusUnauthorized, e)
 		return
 	}
-	sessionID, err := h.Sessions.StoreUserSession(ctx, uidStr)
+	sessionID, sealedCookieValue, err := h.Sessions.NewUserSessionID()
 	if err != nil {
+		h.refuse(w, r, http.StatusInternalServerError, errs.InternalError.WithDetail("failed to seal session cookie").WithCause(err))
+		return
+	}
+	if err = h.Sessions.StoreUserSession(ctx, sessionID, uidStr, nil); err != nil {
 		h.refuse(w, r, http.StatusInternalServerError, errs.KVDB.WithDetail("failed to create session").WithCause(err))
 		return
 	}
-	if err = cookie.FinishLogin(w, r, h.Sessions, sessionID, h.SuccessPath); err != nil {
-		h.refuse(w, r, http.StatusInternalServerError, errs.InternalError.WithDetail("failed to set session cookie").WithCause(err))
-	}
+	cookie.FinishLogin(w, r, h.Sessions, sealedCookieValue, h.SuccessPath)
 }
 
 // refuse answers a refusal: a 303 to FailurePath when set, else the JSON error. A 5xx is logged
