@@ -2,10 +2,12 @@ package framework
 
 import (
 	"github.com/x64c/gwf/gw/jobsched"
+	"github.com/x64c/gwf/gw/pubsubs"
 	"github.com/x64c/gwf/gw/throttle"
 	"github.com/x64c/gwf/gw/uds"
 	"github.com/x64c/gwf/gw/web"
 	"github.com/x64c/gwf/gw/web/session"
+	"github.com/x64c/gwf/gw/web/sse"
 )
 
 // The *Handle accessors mint gated references to Core's own services — the way
@@ -49,6 +51,22 @@ func (c *Core) SessionHandle() ServiceHandle[*session.Service] {
 		return absentServiceHandle[*session.Service]()
 	}
 	return newServiceHandle(c.sessionNode, c.sessionService)
+}
+
+// SSEHandle returns the gated reference to the SSE service.
+func (c *Core) SSEHandle() ServiceHandle[*sse.Service] {
+	if c.sseNode == nil {
+		return absentServiceHandle[*sse.Service]()
+	}
+	return newServiceHandle(c.sseNode, c.sseService)
+}
+
+// PubSubHandle returns the gated reference to the pub/sub broker.
+func (c *Core) PubSubHandle() ServiceHandle[pubsubs.Broker] {
+	if c.pubsubNode == nil {
+		return absentServiceHandle[pubsubs.Broker]()
+	}
+	return newServiceHandle(c.pubsubNode, c.pubsubBroker)
 }
 
 // ThrottleHandle returns the gated reference to the throttle limiter.

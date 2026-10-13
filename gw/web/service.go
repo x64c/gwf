@@ -12,19 +12,20 @@ import (
 )
 
 type Service struct {
-	name       string             // registered instance identity; see NewServiceAs
-	addr       string             // preserved across cycles for *http.Server rebuild
-	handler    http.Handler       // preserved across cycles
-	conf       ServerConf         // the server recipe (deadlines + drain window), validated by the loader
-	ctx        context.Context    // per-cycle runtime context (set in Start)
-	cancel     context.CancelFunc // per-cycle cancel (set in Start)
-	reqCtx     context.Context    // per-cycle; parent of every request ctx — root's values, root's cancellation severed
-	cancelReq  context.CancelFunc // fires when the drain window closes (see run)
-	state      svc.AtomicState    // internal service state (State() may be read concurrently with lifecycle writes)
-	terminated chan error         // one-shot; fires when Terminate completes
-	stopped    chan struct{}      // per-cycle; closed when run goroutine has stopped
-	listener   net.Listener       // per-cycle; bound by Start, so a bind failure fails the start
-	server     *http.Server       // rebuilt each Start cycle (one-shot after Shutdown); unexported — a holder could Shutdown it or swap its handler behind the admission gate
+	name        string             // registered instance identity; see NewServiceAs
+	addr        string             // preserved across cycles for *http.Server rebuild
+	handler     http.Handler       // preserved across cycles
+	conf        ServerConf         // the server recipe (deadlines + drain window), validated by the loader
+	ctx         context.Context    // per-cycle runtime context (set in Start)
+	cancel      context.CancelFunc // per-cycle cancel (set in Start)
+	reqCtx      context.Context    // per-cycle; parent of every request ctx — root's values, root's cancellation severed
+	cancelReq   context.CancelFunc // fires when the drain window closes (see run)
+	drainNotice chan struct{}      // per-cycle; closed when the drain starts (see run); requests receive it via reqCtx
+	state       svc.AtomicState    // internal service state (State() may be read concurrently with lifecycle writes)
+	terminated  chan error         // one-shot; fires when Terminate completes
+	stopped     chan struct{}      // per-cycle; closed when run goroutine has stopped
+	listener    net.Listener       // per-cycle; bound by Start, so a bind failure fails the start
+	server      *http.Server       // rebuilt each Start cycle (one-shot after Shutdown); unexported — a holder could Shutdown it or swap its handler behind the admission gate
 }
 
 func (s *Service) Name() string {
@@ -80,8 +81,12 @@ func (s *Service) Start(parentCtx context.Context) error {
 	// Request contexts inherit the root's VALUES but not its cancellation:
 	// canceling the root opens the drain, and canceling in-flight work at
 	// that same moment would defeat it. They are canceled when the drain
-	// window closes instead — see run.
-	s.reqCtx, s.cancelReq = context.WithCancel(context.WithoutCancel(parentCtx))
+	// window closes instead — see run. What they do get when the drain
+	// opens is the drain notice: a value, not a cancellation, so only a
+	// handler that reads it (DrainNoticeReceiverFromContext) is affected.
+	s.drainNotice = make(chan struct{})
+	reqBase := context.WithValue(context.WithoutCancel(parentCtx), drainNoticeKey{}, (<-chan struct{})(s.drainNotice))
+	s.reqCtx, s.cancelReq = context.WithCancel(reqBase)
 	s.server = s.conf.newHTTPServer(s.addr, s.handler, s.reqCtx) // fresh per cycle
 
 	ln, err := net.Listen("tcp", s.addr)
@@ -184,6 +189,7 @@ func (s *Service) run() {
 
 	select {
 	case <-s.ctx.Done():
+		close(s.drainNotice) // the drain starts now: long-lived handlers finish instead of waiting for cancelReq
 		s.server.SetKeepAlivesEnabled(false)
 		gracefulCtx, cancel := context.WithTimeout(context.Background(), s.conf.drainTimeout())
 		defer cancel()

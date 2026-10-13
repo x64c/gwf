@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/x64c/gwf/gw/svc"
 	"github.com/x64c/gwf/gw/web"
 )
 
@@ -27,12 +28,25 @@ func (c *Core) LoadWebServerConf() error {
 	return c.WebServerConf.Validate()
 }
 
+// webServiceName is the name the web service registers under.
+const webServiceName = "WebService"
+
 // PrepareWebService validates the given conf — its own invariants, then the one
 // relation it has to the already-settled core conf — and registers the web
 // service. The conf is taken as an argument rather than read from the Core so
 // the value the server runs on is the value validated here.
+//
+// The HTTP handler is built by buildHandler, which runs during the registration
+// and receives the web service's Deps. Handlers hold no graph edges of their
+// own: what they use, the web service depends on. So a handler that uses a
+// service gets its handle from these Deps, and that service is declared in
+// deps — then the web service is started after it and torn down before it.
+// A handler that uses no service ignores the Deps:
+//
+//	func(framework.Deps) (http.Handler, error) { return router, nil }
+//
 // Call this when all the required services are prepared.
-func (c *Core) PrepareWebService(conf web.ServerConf, httpHandler http.Handler) (*web.Service, error) {
+func (c *Core) PrepareWebService(conf web.ServerConf, buildHandler func(d Deps) (http.Handler, error), deps ...ServiceDep) (*web.Service, error) {
 	if err := conf.Validate(); err != nil {
 		return nil, err
 	}
@@ -49,7 +63,6 @@ func (c *Core) PrepareWebService(conf web.ServerConf, httpHandler http.Handler) 
 	}
 
 	c.WebServerConf = conf
-	c.webService = web.NewService(httpHandler, conf)
 	// The web subsystem ships middleware that may reach for these, and it
 	// cannot know which of it the app actually mounted — the route tree arrives
 	// as an opaque handler. So it declares the POSSIBILITY. Over-declaring
@@ -59,17 +72,32 @@ func (c *Core) PrepareWebService(conf web.ServerConf, httpHandler http.Handler) 
 	// Named from the registered instances rather than from string literals: a
 	// service registered under a name of the app's choosing still matches, and
 	// one the app never prepared contributes no dependency at all.
-	deps := make([]ServiceDep, 0, 2)
+	own := make([]ServiceDep, 0, 4)
 	if c.throttleNode != nil {
-		deps = append(deps, MayUse(c.throttleNode.Name()))
+		own = append(own, MayUse(c.throttleNode.Name()))
 	}
 	if c.sessionService != nil {
-		deps = append(deps, MayUse(c.sessionService.Name()))
+		own = append(own, MayUse(c.sessionService.Name()))
 	}
-	node, err := c.RegisterService(c.webService, deps...)
+	if c.sseNode != nil {
+		own = append(own, MayUse(c.sseNode.Name()))
+	}
+	if c.pubsubNode != nil {
+		own = append(own, MayUse(c.pubsubNode.Name()))
+	}
+	var webService *web.Service
+	node, err := c.RegisterServiceFunc(webServiceName, func(d Deps) (svc.Service, error) {
+		h, err := buildHandler(d)
+		if err != nil {
+			return nil, err
+		}
+		webService = web.NewServiceAs(webServiceName, h, conf)
+		return webService, nil
+	}, append(own, deps...)...)
 	if err != nil {
 		return nil, err
 	}
+	c.webService = webService
 	c.webNode = node
 	return c.webService, nil
 }

@@ -130,8 +130,8 @@ type Service interface {
 	//   - The send is UNCONDITIONAL — a missed stop deadline must still report,
 	//     with its error. A service that returns early without sending leaves
 	//     `framework.Core.WaitServicesTerminated` counting N-1 forever: main
-	//     wedges until the supervisor's SIGKILL (reproduced 2026-07-27; one
-	//     ctx-blind job wedged the whole process for systemd's full 90s).
+	//     wedges until the supervisor's SIGKILL (under systemd, its whole stop
+	//     timeout).
 	//   - Buffer `s.terminated` with capacity 1 (in NewService) so this single
 	//     send never blocks even if no one is reading yet.
 	Terminate(ctx context.Context) error

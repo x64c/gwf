@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"runtime/debug"
+	"slices"
 	"sync"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/x64c/gwf/gw/jobsched"
 	"github.com/x64c/gwf/gw/kvdbs"
 	"github.com/x64c/gwf/gw/locking"
+	"github.com/x64c/gwf/gw/pubsubs"
 	"github.com/x64c/gwf/gw/security"
 	"github.com/x64c/gwf/gw/sqldbs"
 	"github.com/x64c/gwf/gw/storages"
@@ -26,6 +28,7 @@ import (
 	"github.com/x64c/gwf/gw/web/fwupstream"
 	"github.com/x64c/gwf/gw/web/requests"
 	"github.com/x64c/gwf/gw/web/session"
+	"github.com/x64c/gwf/gw/web/sse"
 )
 
 type Core struct {
@@ -70,6 +73,8 @@ type Core struct {
 	webService           *web.Service      // PrepareWebService
 	sessionService       *session.Service  // PrepareSessionService, PrepareCookieSessions, PrepareBearerSessions
 	throttleService      throttle.Limiter  // PrepareThrottleService (the INTERFACE; see there)
+	sseService           *sse.Service      // PrepareSSEService
+	pubsubBroker         pubsubs.Broker    // PreparePubSubService (the INTERFACE: the app built and chose the broker)
 	actionLockingManager locking.Manager   // PrepareActionLocks, from the sealed mode; reached through ActionLockingManager
 
 	// Core's own services' nodes, retained at their Prepare* so the *Handle
@@ -80,6 +85,8 @@ type Core struct {
 	webNode          *ServiceNode
 	sessionNode      *ServiceNode
 	throttleNode     *ServiceNode
+	sseNode          *ServiceNode
+	pubsubNode       *ServiceNode
 }
 
 // RegisterService registers a service with Core and returns its node — the
@@ -111,12 +118,56 @@ func (c *Core) RegisterService(s svc.Service, extra ...ServiceDep) (*ServiceNode
 	if err != nil {
 		return nil, err
 	}
-	if len(node.deps) == 0 {
-		log.Printf("[INFO] registered service: %s", node.name)
-	} else {
-		log.Printf("[INFO] registered service: %s (depends on %s)", node.name, node.dependencyList())
-	}
+	logRegistered(node)
 	return node, nil
+}
+
+// RegisterServiceFunc registers a service its factory builds. The factory receives Deps — the dependencies declared
+// here, resolved — and takes its handles from it, so whatever the service uses is an edge of the graph. Use it when
+// the service, or something built into it, uses another service; RegisterService remains the call for a service
+// constructed before registration.
+//
+// name is the instance's registered name, needed before the service exists; the built service must report the same
+// Name(). A service that declares its own dependencies (ServiceDeps) has them joined to the ones declared here, as
+// RegisterService does. Nothing may register while the factory runs, and a failed build registers nothing.
+func (c *Core) RegisterServiceFunc(name string, build func(d Deps) (svc.Service, error), deps ...ServiceDep) (*ServiceNode, error) {
+	g := &c.serviceGraph
+	n, err := g.resolve(name, deps...)
+	if err != nil {
+		return nil, err
+	}
+	s, err := func() (svc.Service, error) {
+		g.factoryPendingNode = n
+		defer func() { g.factoryPendingNode = nil }() // also when build panics
+		return build(Deps{name: name, declared: deps, edges: n.deps})
+	}()
+	if err != nil {
+		return nil, fmt.Errorf("service graph: building %q: %w", name, err)
+	}
+	if s == nil {
+		return nil, fmt.Errorf("service graph: the factory for %q returned a nil service", name)
+	}
+	if s.Name() != name {
+		return nil, fmt.Errorf("service graph: the factory for %q built a service named %q — one instance, one name", name, s.Name())
+	}
+	if sd, ok := s.(ServiceDeps); ok {
+		if n, err = g.resolve(name, append(slices.Clone(sd.ServiceDeps()), deps...)...); err != nil {
+			return nil, err
+		}
+	}
+	n.svc = s
+	g.attach(n)
+	logRegistered(n)
+	return n, nil
+}
+
+// logRegistered prints the one registration line both registration paths share.
+func logRegistered(n *ServiceNode) {
+	if len(n.deps) == 0 {
+		log.Printf("[INFO] registered service: %s", n.name)
+	} else {
+		log.Printf("[INFO] registered service: %s (depends on %s)", n.name, n.dependencyList())
+	}
 }
 
 // StartServices seals the graph, then starts every service DEPENDENCIES FIRST —
@@ -336,9 +387,9 @@ func (c *Core) TerminateServices() {
 // being torn down. It cannot help a caller already inside; that is the
 // service's own obligation (svc.Service: methods stay safe after Terminate).
 //
-// A PER-SERVICE budget, as before: one slow teardown must not starve the
-// services behind it (a shared budget once handed healthy services an
-// already-expired ctx — reproduced 2026-07-27).
+// A PER-SERVICE budget: one slow teardown must not starve the services behind
+// it (a shared budget would hand the healthy services after it an
+// already-expired ctx).
 //
 // If the report never comes, the node is ABANDONED: recorded, logged, and the
 // walk continues. Holding the invariant absolutely would mean the supervisor

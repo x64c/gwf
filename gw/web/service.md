@@ -26,11 +26,18 @@ The framework lifecycle (`Start`/`Stop`/`Terminate`) controls **only #2**.
 
 ## Prepare
 
-`Core.PrepareWebService(addr, handler)`:
-- Constructs the Service (`NewService`) and stores `addr` + `handler` on
-  the struct.
-- Registers the Service with `Core.RegisterService`, which places it in the
+`Core.PrepareWebService(conf, buildHandler, deps...)`:
+- Validates `conf` (its own invariants, then `drain_timeout_secs` <
+  `svc_terminate_timeout_secs`).
+- Registers the Service with `Core.RegisterServiceFunc`: the web service's
+  own `MayUse` (throttle, session — when prepared) plus `deps` are resolved,
+  then `buildHandler(d)` builds the HTTP handler from those `Deps`, and the
+  Service (`NewServiceAs("WebService", handler, conf)`) is placed in the
   composition graph the start and terminate walks follow.
+- Handlers hold no graph edges: a service a handler uses is declared in
+  `deps`, and the handler's gated handle comes from `d.Handle`. The web
+  service then starts after that service and is torn down before it. A
+  handler that uses no service ignores the `Deps`.
 
 The `*http.Server` itself is **not** built at Prepare time — it's built
 in `Start` (and rebuilt each cycle, because `http.Server` is one-shot
@@ -41,6 +48,9 @@ after `Shutdown`).
 - Builds a fresh `*http.Server` via `ServerConf.newHTTPServer` (timeouts and
   `BaseContext` come from conf). (Mandatory rebuild — the previous one is
   dead after `Shutdown`.)
+- Makes a fresh **drain notice** for the cycle and stores its receive end in
+  every request context, as a value. A handler gets it with
+  `DrainNoticeReceiverFromContext(r.Context())`.
 - **Binds the listener itself**: `net.Listen("tcp", addr)`. A bind failure
   cancels both per-cycle contexts and is returned from `Start`, so the
   service never reports RUNNING on a port it does not hold.
@@ -61,6 +71,10 @@ arriving on `serverErr`.
 Cancels the per-cycle ctx, which triggers the graceful-drain path inside
 the run goroutine:
 
+0. Closes the cycle's drain notice — the drain starts. It cancels nothing:
+   ordinary handlers keep running and finish inside the drain window. A
+   long-lived handler (a stream) that selects on the notice finishes now,
+   so it does not hold `Shutdown` until the drain deadline.
 1. `s.Server.SetKeepAlivesEnabled(false)` — idle keep-alive conns get
    closed at next request, so they don't hold up the drain.
 2. `s.Server.Shutdown(gracefulCtx)` — stdlib stops accepting new conns,
@@ -86,6 +100,13 @@ After Stop:
   ctx, and is validated at boot to be shorter than the service's terminate
   timeout. Long-running request handlers can be force-cancelled by this
   deadline regardless of what ctx the operator gave to Stop.
+
+**Two signals a handler can see:**
+
+| signal | when | how a handler gets it | effect |
+|---|---|---|---|
+| drain notice | the drain **starts** | `DrainNoticeReceiverFromContext(r.Context())` — a channel that is closed | none by itself; a handler that selects on it may finish now |
+| request context canceled | the drain window **closes** | `r.Context().Done()` | in-flight work is canceled and must unwind |
 
 If the server died on its own (a serving error — a port conflict would have
 failed `Start`) instead of

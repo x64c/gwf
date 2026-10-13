@@ -46,16 +46,6 @@ error answer. Inside goroutines a service spawns itself, only the service's
 own code can recover a panic; report it as the service's failure — the error
 from `Start`, or the error on the `Terminated` send.
 
-On a lifecycle path, a panic escaping a service's `Start` or `Terminate` is
-recovered by the framework, which completes the ordered rollback or teardown
-and then raises the panic again on the goroutine that called `Run` — a
-`defer`/`recover` there catches it; uncaught, the process dies by panic. A
-panicking scheduled job fails that job, with the panic as the error handed to
-its callbacks. A panicking UDS command handler ends that connection with an
-error answer. Inside goroutines a service spawns itself, only the service's
-own code can recover a panic; report it as the service's failure — the error
-from `Start`, or the error on the `Terminated` send.
-
 ### Wiring mistakes
 
 Configuration and wiring errors — a required field unset, a component used
@@ -100,22 +90,58 @@ Exiting mid-flight bypasses the teardown this framework exists to sequence.
 Each HTTP request is served on its own goroutine, and the coordination
 primitives listed below are internally synchronized.
 
-### Guarantee scope of coordination state
+### Coordination state and the mode
 
-| Component | State | Scope |
-|---|---|---|
-| `throttle` | token buckets | per process |
-| `namedlocks` | mutexes (consumer returns HTTP 409) | per process |
-| session `lockstore` | mutexes for session-cap and refresh serialization | per process |
-| `jobsched` | schedule and fired-occurrence state | per process |
-| JWKS | private keys on local disk; active key id in shared KVDB | per process |
-| `uds` | admin socket path derived from the app name | per host |
+An app states its coordination mode in `.core.json` — `"coord_mode"`:
+`"inproc"` or `"crossproc"`, never a default — and each `Prepare*` seats the
+implementation the mode calls for. Under `inproc` the state below lives in
+this process; under `crossproc` it lives in the app's shared KVDB, under the
+app's name, where every process of the app contends for it.
+
+| Component | State | `inproc` | `crossproc` |
+|---|---|---|---|
+| `throttle` | token buckets | this process | shared KVDB |
+| `locking` — action locks, session locks (`max_sessions_per_user`) | lock ledger | this process | shared KVDB |
+| `jobsched` — `OncePerApp` jobs | fired-occurrence marks | this process (the one instance) | shared KVDB: each occurrence fires once per app |
+| `jobsched` — `OncePerInstance` jobs | schedule | this process | each process |
+| `jwtassert` replay cache | admitted assertion ids | this process | shared KVDB |
+| JWKS | private keys on local disk; active key id in the KVDB | per host | per host |
+| `pubsubs` | subscriptions | the seated broker's reach | the seated broker's reach |
+| `web/sse` | open streams | this process: a stream is one client's connection | this process |
+| `uds` | admin socket at the conf's `socket_path` | this process | each process, at its own path |
+
+The pub/sub broker is the app's choice, not the mode's:
+`BrokerLocalSubscriptionsOnly` reaches the subscriptions of the publishing
+process; `pubsubs/redis` reaches every process subscribed on the same Redis.
 
 ### Multiple processes of distinct applications
 
 Cross-process consistency for shared rows is provided by the store (SQL
 transactions and row locks); each application's coordination state concerns
 only its own work.
+
+### Multiple processes of one application
+
+Supported under `crossproc`: limits, locks, the session cap, once-per-app jobs
+and the replay cache hold across every process of the app. What stays per
+process or per host:
+
+- JWKS rotation publishes the new key id to the shared KVDB but writes the
+  private key to local disk. Processes on other hosts then reference a key id
+  they cannot sign with, and `jwks-delete-old-rsakeys` removes keys still in
+  use elsewhere. [ToDo] Support CrossProc mode.
+- Each process needs its own admin socket (`socket_path`): a process whose
+  path is already served refuses to start.
+- `OncePerInstance` jobs fire in every process — that is what they are.
+- `BrokerLocalSubscriptionsOnly` delivers only within the publishing process.
+
+Under `inproc`, a second process of the same app splits all of that state
+between two processes that cannot see each other, and no error is returned:
+limits admit N times the rate, locks exclude only within a process, and every
+scheduled job fires once per process. One instance is the deployment's promise
+to keep. This applies regardless of host count and of request distribution:
+each request is served by exactly one process, so routing is not the
+constraint.
 
 ### Partitioned deployments
 
@@ -124,40 +150,17 @@ Nothing is shared, so nothing requires coordination.
 
 ### `AppName`
 
-Partition key for shared-store keys and socket paths. It must be unique among
-processes that share a KVDB. A distinct name prevents key collisions; it does
-not make a second process of the same application safe, because duties
-(scheduled jobs, limits, locks) still duplicate and session state splits.
+Partition key for shared-store keys, and — with the mode — the app's identity:
+processes running under `crossproc` with the same name against the same shared
+store are one app and share its coordination state; a different name is a
+different app, whatever the binary. Distinct apps sharing a KVDB therefore
+need distinct names: the name keeps their keys apart.
 
 ### Classifying application state
 
 State describing one process — its connections, its service states — is
 unaffected by process count. State asserted as global while held in process
 memory — a limit, a lock, a schedule — holds only while one process runs.
-
-## CURRENTLY UNSUPPORTED
-
-### Multiple processes of one application
-
-No error is returned; the guarantees weaken silently:
-
-- A configured rate limit is enforced per process: N processes admit N times
-  the rate.
-- `max_sessions_per_user` is enforced per process: each acquires its own
-  session lock, then reads the shared list as under cap.
-- Named locks exclude only within a process: a duplicate submission receives
-  HTTP 409 from one process and proceeds in another.
-- Every scheduled job fires once per process, against shared data. This path
-  is not request-driven.
-- JWKS rotation publishes the new key id to the shared KVDB but writes the
-  private key to local disk. Other processes then reference a key id they
-  cannot sign with, and `jwks-delete-old-rsakeys` removes keys still in use
-  elsewhere.
-- On one host, a starting process removes an existing admin socket at the
-  same path and replaces it.
-
-This applies regardless of host count and of request distribution: each
-request is served by exactly one process, so routing is not the constraint.
 
 # Debug Code vs Non-Debug Code
 `//go:build debug && verbose` vs `//go:build !(debug && verbose)`

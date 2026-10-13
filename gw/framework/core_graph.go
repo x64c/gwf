@@ -29,9 +29,10 @@ import (
 // it depends on. Anyone who reads "we terminate in reverse order" and removes
 // those waits reproduces the original defect exactly.
 type serviceGraph struct {
-	nodes  []*ServiceNode
-	byName map[string]*ServiceNode // labels; boot and control plane only
-	sealed bool                    // set by seal; registration is closed afterwards
+	nodes              []*ServiceNode
+	byName             map[string]*ServiceNode // labels; boot and control plane only
+	sealed             bool                    // set by seal; registration is closed afterwards
+	factoryPendingNode *ServiceNode            // the node resolved for the running factory, not yet attached; nil outside a factory
 }
 
 // add registers a service together with what it depends on, and returns its
@@ -59,10 +60,26 @@ func (g *serviceGraph) add(s svc.Service, deps ...ServiceDep) (*ServiceNode, err
 	if s == nil {
 		return nil, fmt.Errorf("service graph: nil service")
 	}
-	if g.sealed {
-		return nil, fmt.Errorf("service graph: %q registered after the graph was sealed — a service registered once the app is starting would never be started, ordered, or admitted", s.Name())
+	n, err := g.resolve(s.Name(), deps...)
+	if err != nil {
+		return nil, err
 	}
-	name := s.Name()
+	n.svc = s
+	g.attach(n)
+	return n, nil
+}
+
+// resolve checks a registration and builds its node — name, declarations,
+// resolved edges — WITHOUT recording anything: no reverse edge, no name, no
+// slot. Recording is attach's job, so a registration that fails after resolve
+// (a factory whose build errors) leaves the graph exactly as it was.
+func (g *serviceGraph) resolve(name string, deps ...ServiceDep) (*ServiceNode, error) {
+	if g.sealed {
+		return nil, fmt.Errorf("service graph: %q registered after the graph was sealed — a service registered once the app is starting would never be started, ordered, or admitted", name)
+	}
+	if g.factoryPendingNode != nil {
+		return nil, fmt.Errorf("service graph: %q registered while the factory for %q was running — a factory builds only its own service; register %q before or after it", name, g.factoryPendingNode.name, name)
+	}
 	if name == "" {
 		return nil, fmt.Errorf("service graph: service registered with an empty name — the name identifies this instance in logs, in status output, and in every dependency declaration")
 	}
@@ -70,7 +87,7 @@ func (g *serviceGraph) add(s svc.Service, deps ...ServiceDep) (*ServiceNode, err
 		return nil, fmt.Errorf("service graph: duplicate service name %q — names identify registered instances, so they must be unique", name)
 	}
 
-	n := &ServiceNode{svc: s, name: name, idx: len(g.nodes), declared: deps, termSig: make(chan error, 1)}
+	n := &ServiceNode{name: name, idx: len(g.nodes), declared: deps, termSig: make(chan error, 1)}
 	for i, d := range deps {
 		if d.label == "" {
 			return nil, fmt.Errorf("service graph: %q declares a dependency with an empty label (dependency #%d of %d)", name, i+1, len(deps))
@@ -91,16 +108,21 @@ func (g *serviceGraph) add(s svc.Service, deps ...ServiceDep) (*ServiceNode, err
 		}
 		n.deps = append(n.deps, serviceEdge{node: target, optional: d.optional})
 	}
+	return n, nil
+}
+
+// attach records a node resolve built: the reverse edge on each dependency, the
+// name, the slot. It cannot fail — every check already ran in resolve, and no
+// registration can happen in between (resolve refuses while a factory runs).
+func (g *serviceGraph) attach(n *ServiceNode) {
 	for _, e := range n.deps {
 		e.node.dependents = append(e.node.dependents, serviceEdge{node: n, optional: e.optional})
 	}
-
 	if g.byName == nil {
 		g.byName = make(map[string]*ServiceNode)
 	}
-	g.byName[name] = n
+	g.byName[n.name] = n
 	g.nodes = append(g.nodes, n)
-	return n, nil
 }
 
 // seal closes registration and settles what could not be settled earlier. Only
