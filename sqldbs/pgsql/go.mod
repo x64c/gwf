@@ -1,10 +1,10 @@
 module github.com/x64c/gwf/sqldbs/pgsql
 
-go 1.27.1
+go 1.27.2
 
 require (
 	github.com/jackc/pgx/v5 v5.11.0
-	github.com/x64c/gwf/gw v0.22.0
+	github.com/x64c/gwf/gw v0.23.0
 )
 
 require (
@@ -13,6 +13,6 @@ require (
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
-	golang.org/x/sync v0.23.0 // indirect
-	golang.org/x/text v0.42.0 // indirect
+	golang.org/x/sync v0.24.0 // indirect
+	golang.org/x/text v0.43.0 // indirect
 )
