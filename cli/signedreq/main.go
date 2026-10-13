@@ -2,10 +2,13 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json/v2"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"strings"
@@ -94,14 +97,18 @@ func main() {
 		}
 	}
 
-	authValue, err := signer.SignRequest(method, target, payload, nil)
-	if err != nil {
-		fail("sign: %v", err)
+	sign := func() string {
+		authValue, err := signer.SignRequest(method, target, payload, nil)
+		if err != nil {
+			fail("sign: %v", err)
+		}
+		if *verbose {
+			fmt.Fprintf(os.Stderr, "signed: %s %s  aud=%s  kid=%s  ttl=%ds  body=%d bytes\n",
+				method, target, signer.Audience, signer.Kid, int(signer.MaxAge/time.Second), len(payload))
+		}
+		return authValue
 	}
-	if *verbose {
-		fmt.Fprintf(os.Stderr, "signed: %s %s  aud=%s  kid=%s  ttl=%ds  body=%d bytes\n",
-			method, target, signer.Audience, signer.Kid, int(signer.MaxAge/time.Second), len(payload))
-	}
+	authValue := sign()
 	if *signOnly {
 		fmt.Println(authValue)
 		return
@@ -111,31 +118,70 @@ func main() {
 	if base == "" {
 		base = signer.Audience // the audience IS the verifying side's identity
 	}
-	req, err := http.NewRequest(method, strings.TrimRight(base, "/")+target, bytes.NewReader(payload))
-	if err != nil {
-		fail("request: %v", err)
+	newRequest := func(authValue string) *http.Request {
+		req, err := http.NewRequest(method, strings.TrimRight(base, "/")+target, bytes.NewReader(payload))
+		if err != nil {
+			fail("request: %v", err)
+		}
+		req.Header.Set("Authorization", authValue)
+		if payload != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		for _, h := range a.Headers {
+			name, value, _ := strings.Cut(h, ":")
+			req.Header.Set(strings.TrimSpace(name), strings.TrimSpace(value))
+		}
+		return req
 	}
-	req.Header.Set("Authorization", authValue)
-	if payload != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	for _, h := range a.Headers {
-		name, value, _ := strings.Cut(h, ":")
-		req.Header.Set(strings.TrimSpace(name), strings.TrimSpace(value))
+	showHead := func(res *http.Response) {
+		if *showRes {
+			fmt.Fprintf(os.Stderr, "HTTP %s\n", res.Status)
+			for k, v := range res.Header {
+				fmt.Fprintf(os.Stderr, "%s: %s\n", k, strings.Join(v, ", "))
+			}
+			fmt.Fprintln(os.Stderr)
+		}
 	}
 
-	res, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	req := newRequest(authValue)
+	res, release, err := send(req)
 	if err != nil {
 		fail("send: %v", err)
 	}
-	defer res.Body.Close()
-	if *showRes {
-		fmt.Fprintf(os.Stderr, "HTTP %s\n", res.Status)
-		for k, v := range res.Header {
-			fmt.Fprintf(os.Stderr, "%s: %s\n", k, strings.Join(v, ", "))
+	showHead(res)
+
+	// An event stream is held the way a browser's EventSource holds one: each event is printed as it comes; when
+	// the stream ends or the connection fails, the same request is sent again — freshly signed, since an assertion
+	// is admitted once — after the stream's reconnection time, with Last-Event-ID; any answer that is not an event
+	// stream ends it, and is printed and judged like any other answer.
+	if isEventStream(res) {
+		stream := eventStream{lastEventID: req.Header.Get("Last-Event-ID"), reconnect: 3 * time.Second}
+		for isEventStream(res) {
+			err = stream.read(res.Body, os.Stdout)
+			release()
+			cause := "the server ended it"
+			if err != nil {
+				cause = err.Error()
+			}
+			for {
+				fmt.Fprintf(os.Stderr, "stream ended (%s); reopening in %v\n", cause, stream.reconnect)
+				time.Sleep(stream.reconnect)
+				req = newRequest(sign())
+				req.Header.Del("Last-Event-ID")
+				if stream.lastEventID != "" {
+					req.Header.Set("Last-Event-ID", stream.lastEventID)
+				}
+				if res, release, err = send(req); err == nil {
+					break
+				}
+				cause = "reopening failed: " + err.Error()
+			}
+			showHead(res)
 		}
-		fmt.Fprintln(os.Stderr)
+		fmt.Fprintf(os.Stderr, "stream not reopened: HTTP %s\n", res.Status)
 	}
+	defer release()
+	defer res.Body.Close()
 	out, _ := io.ReadAll(res.Body)
 	os.Stdout.Write(out)
 	if len(out) > 0 && out[len(out)-1] != '\n' {
@@ -145,6 +191,33 @@ func main() {
 		fmt.Fprintf(os.Stderr, "refused: HTTP %s\n", res.Status)
 		os.Exit(1)
 	}
+}
+
+// send makes one exchange and cuts it after 30 s, headers and body together — unless the answer is an event stream,
+// whose body has no end to wait for. release frees the exchange once its body is done with.
+func send(req *http.Request) (res *http.Response, release func(), err error) {
+	ctx, cancel := context.WithCancelCause(req.Context())
+	cut := time.AfterFunc(30*time.Second, func() { cancel(errors.New("no complete answer within 30 s")) })
+	res, err = http.DefaultClient.Do(req.WithContext(ctx))
+	if err != nil {
+		cut.Stop()
+		if cause := context.Cause(ctx); cause != nil {
+			err = cause
+		}
+		cancel(nil)
+		return nil, nil, err
+	}
+	if isEventStream(res) {
+		cut.Stop()
+	}
+	return res, func() { cut.Stop(); cancel(nil) }, nil
+}
+
+// isEventStream reports whether res opens an event stream: status 200 with Content-Type text/event-stream, the only
+// answer a browser's EventSource holds.
+func isEventStream(res *http.Response) bool {
+	mediaType, _, err := mime.ParseMediaType(res.Header.Get("Content-Type"))
+	return res.StatusCode == http.StatusOK && err == nil && mediaType == "text/event-stream"
 }
 
 // mergeConf fills only the fields the command line left empty: a flag the
@@ -226,7 +299,8 @@ func buildSigner(a *args) (*jwtassert.Signer, error) {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, `signedreq — one HTTP request to a framework app, signed as a jwtassert client.
+	fmt.Fprintf(os.Stderr, `signedreq — one HTTP request to a framework app, signed as a jwtassert client; an
+event-stream answer is held as a browser holds one, each event printed as a JSON line.
 
 usage: signedreq [flags] METHOD TARGET
 

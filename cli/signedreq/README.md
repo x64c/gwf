@@ -1,6 +1,7 @@
 # signedreq
 
-One HTTP request to a framework app, signed as a `jwtassert` client.
+One HTTP request to a framework app, signed as a `jwtassert` client — and, when
+the answer is an event stream, that stream, held as a browser holds one.
 
 ```
 signedreq [flags] METHOD TARGET
@@ -100,7 +101,27 @@ the host that signs and is read at each call.
 
 Body on stdout, status and headers on stderr under `-i`, so a pipeline sees
 only the body. Exit status is 0 only for 2xx; a refusal prints the server's
-error document and exits 1.
+error document and exits 1. An answer must be complete within 30 s — except an
+event stream.
+
+## Event streams
+
+An answer of status 200 with `Content-Type: text/event-stream` is held the way
+a browser's `EventSource` holds one (WHATWG HTML, "Server-sent events"):
+
+- Each event is printed as it arrives, as one JSON line:
+  `{"id": <last event ID>, "event": <type, default "message">, "data": <data>}`.
+  Comments, events with no data, and an event left unfinished when the stream
+  ends print nothing.
+- When the stream ends or the connection fails, the same request is sent
+  again after the reconnection time — 3 s, or what the stream's `retry:` set —
+  with `Last-Event-ID` when the stream has given an event ID. Each reopen is
+  signed afresh: an assertion is admitted once. A failed reopen is tried again
+  after the same wait.
+- Any other answer to a reopen ends it, and is printed and judged like any
+  answer: a `204` — the server asking not to come back — exits 0, an error 1.
+
+Reopens and what ended each stream are reported on stderr.
 
 ## Scope
 
