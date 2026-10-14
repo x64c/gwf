@@ -14,6 +14,11 @@ import "net/http"
 //
 // The handler it returns is what serves requests, so the chain composes as
 // before: http.Handler in, http.Handler out, to any depth.
+//
+// A wrapper that passes the next handler a ResponseWriter of its own must give
+// that writer Unwrap() http.ResponseWriter: http.ResponseController reaches
+// Flush, write deadlines and Hijack through it, so without it they stop
+// working for every handler behind the wrapper — a stream among them.
 type HandlerWrapper interface {
 	Wrap(http.Handler) (http.Handler, error)
 }

@@ -33,8 +33,10 @@ err := sse.Serve(service, w, r, src)
 
 1. The handler decides the caller may have the stream (authorization is the app's), prepares its source, and loads
    what the client missed if it says where it was.
-2. `Serve` answers 204 while the service is not running. Otherwise it sends the headers and the `Backlog`, then a
-   frame per item and the heartbeat after each silence.
+2. `Serve` answers 204 while the service is not running, and 500 when the `ResponseWriter` it is given hides write
+   deadlines — a wrapper in front that passes on a writer of its own must give it `Unwrap() http.ResponseWriter`,
+   since every frame sets a deadline and flushes through `http.ResponseController`. Otherwise it sends the headers and
+   the `Backlog`, then a frame per item and the heartbeat after each silence.
 3. The stream ends when `Items` or `EndNotice` closes, when the web service starts its drain, when the service stops,
    when the client leaves, or when a write fails or does not finish within `frame_write_timeout_secs`. On the first
    three the client is told to reconnect after `retry_millis`.
