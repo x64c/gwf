@@ -3,7 +3,7 @@ module github.com/x64c/gwf/auth/passwd
 go 1.27.2
 
 require (
-	github.com/x64c/gwf/gw v0.23.0
+	github.com/x64c/gwf/gw v0.24.0
 	golang.org/x/crypto v0.58.0
 )
 
