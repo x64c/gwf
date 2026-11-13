@@ -1,6 +1,10 @@
 package coll
 
-import "github.com/x64c/gwf/gw/model"
+import (
+	"fmt"
+
+	"github.com/x64c/gwf/gw/model"
+)
 
 // EnumerateToSlice iterates over every model in the collection and calls yield for each.
 // Every model contributes exactly one value. No skipping.
@@ -81,7 +85,7 @@ func (c *Collection[MP, ID]) CollectUniqueToSlice[V comparable](
 ) []V {
 	sl := make([]V, 0, c.Len())
 	seen := make(map[V]struct{}, c.Len())
-	if len(c.order) > 0 {
+	if c.IsOrdered() {
 		// Ordered iteration: preserve first occurrence order
 		for _, id := range c.order {
 			item, ok := c.itemsMap[id]
@@ -113,7 +117,7 @@ func (c *Collection[MP, ID]) CollectUniqueToSliceWithSkip[V comparable](
 ) []V {
 	sl := make([]V, 0, c.Len())
 	seen := make(map[V]struct{}, c.Len())
-	if len(c.order) > 0 {
+	if c.IsOrdered() {
 		for _, id := range c.order {
 			item, ok := c.itemsMap[id]
 			if !ok {
@@ -178,19 +182,23 @@ func (src *Collection[SP, SID]) BuildUnorderedCollectionFrom[
 	return newColl
 }
 
-// BuildOrderedCollectionFrom constructs a new ordered collection
-// by applying yield to each entity in the source collection.
-// If yield returns nil, that entity is skipped.
-// The resulting collection preserves the iteration order of src.
+// BuildOrderedCollectionFrom builds a new ordered collection by applying yield
+// to each item of src, in src's order; skip (nil = none) drops a built item, and
+// a built item whose ID is already present is dropped too (the first is kept).
+// src must be ordered — its order is the only order this build has: Sort an
+// unordered src first, or use BuildUnorderedCollectionFrom.
 func (src *Collection[SP, SID]) BuildOrderedCollectionFrom[
 	NP model.Identifiable[NID],
 	NID comparable,
 ](
 	yield func(SP) NP,
 	skip func(NP) bool,
-) *Collection[NP, NID] {
+) (*Collection[NP, NID], error) {
 	if src == nil {
-		return nil
+		return nil, nil
+	}
+	if !src.IsOrdered() {
+		return nil, fmt.Errorf("coll: BuildOrderedCollectionFrom needs an ordered source — Sort it first, or use BuildUnorderedCollectionFrom")
 	}
 	newColl := NewEmptyOrderedCollection[NP, NID]()
 
@@ -205,7 +213,7 @@ func (src *Collection[SP, SID]) BuildOrderedCollectionFrom[
 				newColl.AddIfNew(np)
 			}
 		}
-		return newColl
+		return newColl, nil
 	}
 
 	for _, id := range src.order {
@@ -216,5 +224,5 @@ func (src *Collection[SP, SID]) BuildOrderedCollectionFrom[
 		np := yield(sp)
 		newColl.AddIfNew(np)
 	}
-	return newColl
+	return newColl, nil
 }

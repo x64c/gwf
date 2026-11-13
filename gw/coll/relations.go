@@ -55,9 +55,13 @@ func (children *Collection[CP, CID]) LinkBelongsTo[
 	return nil
 }
 
-// LinkHasMany connects ParentCollection-ChildCollection where a Parent-HasMany-Children
-// ForeignKeyField is on the Child
-// RelationField (a Slice) is on the Parent
+// LinkHasMany wires each parent's HasMany relation field to its children: the
+// children are grouped by foreignKey (their parent's ID), and each parent gets
+// its own child collection — an empty one when it has none. Each side keeps its
+// kind: parents is only read, so its kind and order stay as they are; every
+// child collection takes the children's kind — ordered children give ordered
+// child collections, each in the children's relative order (e.g. a query's
+// ORDER BY); unordered children give unordered ones.
 func (parents *Collection[PP, PID]) LinkHasMany[
 	CP model.Identifiable[CID],
 	CID comparable,
@@ -66,35 +70,27 @@ func (parents *Collection[PP, PID]) LinkHasMany[
 	foreignKey func(CP) PID, // on the child
 	relationFieldPtr func(PP) **Collection[CP, CID], // on the parent
 ) {
-	childCollGrpByPID := make(map[PID]*Collection[CP, CID], parents.Len())
-	if len(children.order) > 0 {
-		// Ordered: iterate in order to preserve SQL ORDER BY
-		for _, cid := range children.order {
-			child := children.itemsMap[cid]
-			pid := foreignKey(child)
-			childColl, ok := childCollGrpByPID[pid]
-			if !ok {
-				childColl = NewEmptyOrderedCollection[CP, CID]()
-				childCollGrpByPID[pid] = childColl
-			}
-			childColl.Add(child)
-		}
+	var childCollCtor func() *Collection[CP, CID]
+	if children.IsOrdered() {
+		childCollCtor = NewEmptyOrderedCollection[CP, CID]
 	} else {
-		for _, child := range children.itemsMap {
-			pid := foreignKey(child)
-			childColl, ok := childCollGrpByPID[pid]
-			if !ok {
-				childColl = NewEmptyOrderedCollection[CP, CID]()
-				childCollGrpByPID[pid] = childColl
-			}
-			childColl.Add(child)
-		}
+		childCollCtor = NewEmptyUnorderedCollection[CP, CID]
 	}
+	childCollGrpByPID := make(map[PID]*Collection[CP, CID], parents.Len())
+	children.ForEach(func(child CP) { // the children's order when ordered
+		pid := foreignKey(child)
+		childColl, ok := childCollGrpByPID[pid]
+		if !ok {
+			childColl = childCollCtor()
+			childCollGrpByPID[pid] = childColl
+		}
+		childColl.Add(child)
+	})
 	for pid, parent := range parents.itemsMap {
 		if childColl, ok := childCollGrpByPID[pid]; ok {
 			*relationFieldPtr(parent) = childColl
 		} else {
-			*relationFieldPtr(parent) = NewEmptyOrderedCollection[CP, CID]()
+			*relationFieldPtr(parent) = childCollCtor()
 		}
 	}
 }

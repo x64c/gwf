@@ -35,23 +35,37 @@ func NewEmptyUnorderedCollection[
 	}
 }
 
+// NewUnorderedCollection collects items with no order kept. Their IDs must be
+// distinct: a repeated ID refuses the whole input, naming the first repeat.
 func NewUnorderedCollection[
 	MP model.Identifiable[ID],
 	ID comparable,
-](items []MP) *Collection[MP, ID] {
+](items []MP) (*Collection[MP, ID], error) {
 	coll := &Collection[MP, ID]{
 		itemsMap: make(map[ID]MP, len(items)),
 	}
 	for _, item := range items {
 		coll.itemsMap[item.GetID()] = item
 	}
-	return coll
+	if len(coll.itemsMap) != len(items) { // a map holds each key once: smaller means an ID repeated
+		seen := make(map[ID]struct{}, len(coll.itemsMap))
+		for i, item := range items {
+			id := item.GetID()
+			if _, dup := seen[id]; dup {
+				return nil, fmt.Errorf("coll: items[%d] repeats ID %v", i, id)
+			}
+			seen[id] = struct{}{}
+		}
+	}
+	return coll, nil
 }
 
+// NewOrderedCollection collects items in the order given. Their IDs must be
+// distinct: a repeated ID refuses the whole input, naming the first repeat.
 func NewOrderedCollection[
 	MP model.Identifiable[ID],
 	ID comparable,
-](items []MP) *Collection[MP, ID] {
+](items []MP) (*Collection[MP, ID], error) {
 	coll := &Collection[MP, ID]{
 		itemsMap: make(map[ID]MP, len(items)),
 		order:    make([]ID, len(items)),
@@ -61,7 +75,16 @@ func NewOrderedCollection[
 		coll.itemsMap[id] = item
 		coll.order[i] = id
 	}
-	return coll
+	if len(coll.itemsMap) != len(items) { // a map holds each key once: smaller means an ID repeated
+		seen := make(map[ID]struct{}, len(coll.itemsMap))
+		for i, id := range coll.order {
+			if _, dup := seen[id]; dup {
+				return nil, fmt.Errorf("coll: items[%d] repeats ID %v", i, id)
+			}
+			seen[id] = struct{}{}
+		}
+	}
+	return coll, nil
 }
 
 func (c *Collection[MP, ID]) Len() int {
@@ -194,7 +217,7 @@ func (c *Collection[MP, ID]) ForEachUnorderly(fn func(MP)) {
 }
 
 func (c *Collection[MP, ID]) ForEachOrderly(fn func(MP)) error {
-	if len(c.order) == 0 {
+	if !c.IsOrdered() {
 		return fmt.Errorf("collection is unordered")
 	}
 	for _, id := range c.order {
@@ -230,9 +253,15 @@ func (c *Collection[MP, ID]) Iter() iter.Seq[MP] {
 	}
 }
 
-func (c *Collection[MP, ID]) Filter(fn func(MP) bool) *Collection[MP, ID] {
-	// If ordered, keep the same order slice layout
-	if len(c.order) > 0 {
+// Filter returns a new collection of the items fn keeps, of c's kind (ordered
+// ones in c's order). A nil c is refused: an unloaded relation is nil, while a
+// loaded one with no items is an empty collection.
+func (c *Collection[MP, ID]) Filter(fn func(MP) bool) (*Collection[MP, ID], error) {
+	if c == nil {
+		return nil, fmt.Errorf("coll: Filter on a nil collection — not loaded or not built")
+	}
+	// If ordered — even when empty — the result is ordered too, in the same layout
+	if c.IsOrdered() {
 		filtered := &Collection[MP, ID]{
 			itemsMap: make(map[ID]MP, len(c.itemsMap)),
 			order:    make([]ID, 0, len(c.order)),
@@ -244,7 +273,7 @@ func (c *Collection[MP, ID]) Filter(fn func(MP) bool) *Collection[MP, ID] {
 				filtered.order = append(filtered.order, id)
 			}
 		}
-		return filtered
+		return filtered, nil
 	}
 	// Unordered — iterate directly over the map
 	filtered := &Collection[MP, ID]{
@@ -255,7 +284,7 @@ func (c *Collection[MP, ID]) Filter(fn func(MP) bool) *Collection[MP, ID] {
 			filtered.itemsMap[id] = item
 		}
 	}
-	return filtered
+	return filtered, nil
 }
 
 // First returns the first item from the collection if ordered.

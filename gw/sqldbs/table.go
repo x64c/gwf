@@ -134,11 +134,13 @@ func (m *Table) ValidatePK(pk PK) error {
 }
 
 // SinglePKColumn is the key column of a single-column key, and an error on a
-// composite one. It exists for operations built on one key value — the model
-// layer's single identity (GetID), or an auto-increment key, which is a single
-// column's property — so their implementations state the requirement by
-// calling this rather than assuming it. Callers wrap the error with their own
-// context.
+// composite one. It exists for operations that use a model's GetID as one key
+// column's value — loading parents by key, deleting a collection by its IDs —
+// and for an auto-increment key, a single column's property; their
+// implementations state the requirement by calling this rather than assuming
+// it. A composite key still gives each model one identity: GetID returns one
+// comparable value covering every key column (e.g. a struct of them), which
+// collections key by. Callers wrap the error with their own context.
 func (m *Table) SinglePKColumn() (Column, error) {
 	if m.pkColumns.Len() != 1 {
 		return Column{}, fmt.Errorf("table %q has a %d-column primary key; this operation requires a single-column key", m.name, m.pkColumns.Len())
